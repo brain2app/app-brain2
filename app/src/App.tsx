@@ -18,6 +18,8 @@ import { ReposHome } from "./repos/ReposHome";
 import { RepoView } from "./repos/RepoView";
 import { useRepos } from "./repos/store";
 import { CalendarPage, CalendarsHome } from "./calendars/CalendarsPage";
+import { BoardPage, BoardsHome } from "./boards/BoardsPage";
+import { SOURCE_CHANGED, useBoards } from "./boards/store";
 import { useCalendars } from "./calendars/store";
 import { TerminalPanel } from "./terminal/TerminalPanel";
 import { SyncConflictDialog } from "./vaultSync";
@@ -122,6 +124,7 @@ export function App() {
     const app = useApp.getState();
     useRepos.getState().load().catch(() => undefined);
     useCalendars.getState().load().catch(() => undefined);
+    useBoards.getState().load().catch(() => undefined);
     useTerminals.getState().refresh().catch(() => undefined);
     Promise.all([app.loadSettings(), app.loadVaults()])
       .then(() => {
@@ -142,6 +145,10 @@ export function App() {
         window.dispatchEvent(new Event("brain2:accounts-changed"));
         return;
       }
+      if (ev.type === "terminal.job") {
+        window.dispatchEvent(new CustomEvent("brain2:terminal-job", { detail: { job_id: ev.job_id, code: ev.code } }));
+        return;
+      }
       if (ev.type === "terminals.changed") {
         useTerminals.getState().refresh().catch(() => undefined);
         return;
@@ -151,12 +158,25 @@ export function App() {
         useCalendars.getState().bump();
         return;
       }
+      if (ev.type === "boards.changed") {
+        useBoards.getState().load().catch(() => undefined);
+        return;
+      }
+      if (ev.type === "board.content") {
+        window.dispatchEvent(new CustomEvent(SOURCE_CHANGED, { detail: { board_id: ev.board_id } }));
+        return;
+      }
+      if (ev.type === "vault.changed") {
+        window.dispatchEvent(new CustomEvent(SOURCE_CHANGED, { detail: { vault_id: ev.vault_id, paths: ev.paths, origin: ev.origin } }));
+      }
       if (ev.type === "events.changed") {
         useCalendars.getState().bump();
         return;
       }
       if (ev.type === "repos.changed" || ev.type === "repo.changed") {
         useRepos.getState().load().catch(() => undefined);
+        // HEAD moved outside BRAIN2 (git checkout/commit/pull in a terminal): open repo views reload.
+        if (ev.origin === "head") useRepos.getState().bump();
         return;
       }
       if (ev.type === "vaults.changed") {
@@ -214,10 +234,12 @@ export function App() {
         {route.module === "vaults" && <VaultsHome />}
         {route.module === "coming" && <ComingSoon name={route.name} />}
         {route.module === "vault" && (
-          <VaultWorkspace vaultId={route.vaultId} initialFile={route.vaultId === INITIAL_VAULT ? INITIAL_FILE : null} />
+          <VaultWorkspace vaultId={route.vaultId} initialFile={route.file ?? (route.vaultId === INITIAL_VAULT ? INITIAL_FILE : null)} />
         )}
         {route.module === "repos" && <ReposHome />}
         {route.module === "calendars" && <CalendarsHome />}
+        {route.module === "boards" && <BoardsHome />}
+        {route.module === "board" && <BoardPage key={route.boardId} boardId={route.boardId} />}
         {route.module === "calendar" && <CalendarPage key={route.calendarId} calendarId={route.calendarId} />}
         {route.module === "repo" && <RepoView repoId={route.repoId} page={route.page ?? "files"} arg={route.arg} />}
         </div>

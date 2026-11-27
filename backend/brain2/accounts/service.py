@@ -276,6 +276,8 @@ class AccountService:
             with self.http() as client:
                 tokens = P.exchange_code(f["provider"], f["config"], params.get("code", ""), f["verifier"],
                                          f["redirect_uri"], client)
+                if P.missing_scopes(f["provider"], tokens):
+                    raise P.ProviderError(P.MISSING_CALENDAR)
                 email = P.profile_email(f["provider"], tokens["access_token"], client)
             account = self._insert(f["provider"], f["nickname"], email, tokens)
             f.update(status="done", account=account)

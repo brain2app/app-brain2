@@ -8,7 +8,8 @@ import {
   createFolder,
   createNote,
   deletePath,
-  movePath,
+  deletePaths,
+  movePaths,
   renamePath,
   revealInOS,
   openTerminalAt,
@@ -23,6 +24,86 @@ import { type MenuItem, reportError, useApp, useWorkspace } from "../store";
 import { vaultMenu } from "../vaultActions";
 
 const DRAG_TYPE = "application/x-brain2-path";
+/** JSON list of every dragged path (a multi-selection drag). */
+const PATHS_TYPE = "application/x-brain2-paths";
+
+// ---------------------------------------------------------------------------- multi-selection (like Obsidian)
+/** Paths in the order the explorer shows them (expanded folders only), for Shift+click ranges. */
+function visibleOrder(): string[] {
+  const { tree, expanded } = useWorkspace.getState();
+  const out: string[] = [];
+  const walk = (nodes: TreeNode[]) => {
+    for (const n of sortChildren(nodes)) {
+      out.push(n.path);
+      if (n.type === "folder" && expanded[n.path]) walk((n as TreeFolder).children);
+    }
+  };
+  if (tree) walk(tree.children);
+  return out;
+}
+
+let anchor: string | null = null;
+
+/** Handles Cmd/Ctrl+click (toggle) and Shift+click (range). Returns true when the click was a selection click. */
+function pickClick(e: React.MouseEvent, path: string): boolean {
+  const ws = useWorkspace.getState();
+  if (e.shiftKey) {
+    const order = visibleOrder();
+    const from = order.indexOf(anchor ?? ws.selected ?? path);
+    const to = order.indexOf(path);
+    const [a, b] = from < 0 ? [to, to] : [Math.min(from, to), Math.max(from, to)];
+    ws.set({ picked: order.slice(a, b + 1), selected: path });
+    return true;
+  }
+  if (e.metaKey || e.ctrlKey) {
+    // The item you were on joins the selection, like Obsidian.
+    const base = ws.picked.length ? ws.picked : ws.selected && ws.selected !== path ? [ws.selected] : [];
+    const picked = base.includes(path) ? base.filter((p) => p !== path) : [...base, path];
+    ws.set({ picked, selected: path });
+    anchor = path;
+    return true;
+  }
+  anchor = path;
+  if (ws.picked.length) ws.set({ picked: [] });
+  return false;
+}
+
+/** Paths a drag carries: the whole selection when the dragged item is part of it. */
+function dragged(path: string): string[] {
+  const picked = useWorkspace.getState().picked;
+  return picked.includes(path) ? picked : [path];
+}
+
+function multiMenu(paths: string[]): MenuItem[] {
+  const files = useWorkspace.getState().files;
+  const notes = paths.filter((p) => files.some((f) => f.path === p));
+  return [
+    ...(notes.length
+      ? [
+          { label: `Open ${notes.length} in new tabs`, icon: "tab", action: () => notes.forEach((p) => useWorkspace.getState().openFile(p, { newTab: true })) },
+          {
+            label: "Copy wikilinks",
+            icon: "link",
+            action: () => copyText(notes.map((p) => `[[${p.endsWith(".md") ? splitExt(basename(p))[0] : basename(p)}]]`).join("\n")),
+          },
+          { separator: true } as MenuItem,
+        ]
+      : []),
+    { label: "Clear selection", icon: "deselect", action: () => useWorkspace.getState().set({ picked: [] }) },
+    { separator: true },
+    { label: `Delete ${paths.length} items`, icon: "delete", danger: true, action: () => deletePaths(paths) },
+  ];
+}
+
+function dragGhost(e: React.DragEvent, count: number) {
+  if (count < 2) return;
+  const el = document.createElement("div");
+  el.className = "tree-drag-ghost";
+  el.textContent = `${count} items`;
+  document.body.append(el);
+  e.dataTransfer.setDragImage(el, 12, 12);
+  setTimeout(() => el.remove(), 0);
+}
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 function VaultSyncButton({ vaultId }: { vaultId: string }) {
@@ -105,6 +186,16 @@ function FileExplorer() {
   const tree = useWorkspace((s) => s.tree);
   const set = useWorkspace((s) => s.set);
   const [dropRoot, setDropRoot] = useState(false);
+  const pickedCount = useWorkspace((s) => s.picked.length);
+  // Escape clears the multi-selection.
+  useEffect(() => {
+    if (!pickedCount) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !document.querySelector(".modal-backdrop, .menu")) useWorkspace.getState().set({ picked: [] });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pickedCount]);
   if (!tree) return <div className="panel-body empty small">Loading…</div>;
 
   const onDropRoot = (e: React.DragEvent) => {
@@ -166,10 +257,16 @@ function FileExplorer() {
 }
 
 async function handleDrop(e: React.DragEvent, folder: string) {
+  let paths: string[] = [];
+  try {
+    paths = JSON.parse(e.dataTransfer.getData(PATHS_TYPE) || "[]");
+  } catch {
+    paths = [];
+  }
   const src = e.dataTransfer.getData(DRAG_TYPE);
-  if (src) {
-    if (dirname(src) === folder || src === folder) return;
-    await movePath(src, folder ? `${folder}/${basename(src)}` : basename(src));
+  if (!paths.length && src) paths = [src];
+  if (paths.length) {
+    await movePaths(paths, folder);
     if (folder) useWorkspace.getState().toggleFolder(folder, true);
     return;
   }
@@ -240,6 +337,7 @@ function TreeItem({ node, depth }: { node: TreeNode; depth: number }) {
   const expanded = useWorkspace((s) => !!s.expanded[node.path]);
   const icon = useWorkspace((s) => s.icons[node.path]);
   const selected = useWorkspace((s) => s.selected === node.path);
+  const picked = useWorkspace((s) => s.picked.includes(node.path));
   const activePath = useWorkspace((s) => s.tabs.find((t) => t.id === s.activeId)?.path);
   const [over, setOver] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -253,10 +351,19 @@ function TreeItem({ node, depth }: { node: TreeNode; depth: number }) {
   const dragProps = {
     draggable: true,
     onDragStart: (e: React.DragEvent) => {
+      const paths = dragged(node.path);
       e.dataTransfer.setData(DRAG_TYPE, node.path);
-      const [stem, ext] = splitExt(node.name);
-      e.dataTransfer.setData("text/plain", node.type === "file" ? `[[${ext === "md" ? stem : node.name}]]` : node.path);
+      e.dataTransfer.setData(PATHS_TYPE, JSON.stringify(paths));
+      // Dropped into a note: one wikilink per file.
+      const files = useWorkspace.getState().files;
+      const text = paths.map((p) => {
+        if (!files.some((f) => f.path === p)) return p;
+        const [stem, ext] = splitExt(basename(p));
+        return `[[${ext === "md" ? stem : basename(p)}]]`;
+      });
+      e.dataTransfer.setData("text/plain", text.join("\n"));
       e.dataTransfer.effectAllowed = "copyMove";
+      dragGhost(e, paths.length);
     },
   };
 
@@ -266,16 +373,19 @@ function TreeItem({ node, depth }: { node: TreeNode; depth: number }) {
       <div className="tree-folder">
         <div
           ref={ref}
-          className={`tree-item folder${selected ? " selected" : ""}${over ? " drop-target" : ""}`}
+          className={`tree-item folder${selected ? " selected" : ""}${picked ? " picked" : ""}${over ? " drop-target" : ""}`}
           style={pad}
           {...dragProps}
-          onClick={() => {
+          onClick={(e) => {
+            if (pickClick(e, folder.path)) return;
             useWorkspace.getState().toggleFolder(folder.path);
             useWorkspace.getState().set({ selected: folder.path });
           }}
           onContextMenu={(e) => {
             e.preventDefault();
-            useWorkspace.getState().set({ selected: folder.path });
+            const multi = useWorkspace.getState().picked;
+            if (picked && multi.length > 1) return useApp.getState().showMenu(e, multiMenu(multi));
+            useWorkspace.getState().set({ selected: folder.path, picked: [] });
             useApp.getState().showMenu(e, folderMenu(folder.path));
           }}
           onDragOver={(e) => {
@@ -312,15 +422,20 @@ function TreeItem({ node, depth }: { node: TreeNode; depth: number }) {
   return (
     <div
       ref={ref}
-      className={`tree-item file${isActive ? " active" : ""}${selected ? " selected" : ""}`}
+      className={`tree-item file${isActive ? " active" : ""}${selected ? " selected" : ""}${picked ? " picked" : ""}`}
       style={pad}
       {...dragProps}
       title={file.path}
-      onClick={(e) => useWorkspace.getState().openFile(file.path, { newTab: e.metaKey || e.ctrlKey })}
+      onClick={(e) => {
+        if (pickClick(e, file.path)) return;
+        useWorkspace.getState().openFile(file.path);
+      }}
       onAuxClick={(e) => e.button === 1 && useWorkspace.getState().openFile(file.path, { newTab: true })}
       onContextMenu={(e) => {
         e.preventDefault();
-        useWorkspace.getState().set({ selected: file.path });
+        const multi = useWorkspace.getState().picked;
+        if (picked && multi.length > 1) return useApp.getState().showMenu(e, multiMenu(multi));
+        useWorkspace.getState().set({ selected: file.path, picked: [] });
         useApp.getState().showMenu(e, fileMenu(file));
       }}
     >

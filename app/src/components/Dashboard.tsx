@@ -127,7 +127,7 @@ export function ComingSoon({ name }: { name: string }) {
       <div className="hero">
         <Icon name={m?.icon ?? "construction"} size={56} />
         <h2>{m?.label ?? name}</h2>
-        <p className="muted">This module arrives in a next wave.</p>
+        <p className="muted">{m && "soon" in m ? "Coming soon" : "This module arrives in a next wave."}</p>
       </div>
     </div>
   );

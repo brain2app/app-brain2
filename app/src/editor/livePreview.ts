@@ -11,6 +11,7 @@ import {
   type ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 import emojiData from "markdown-it-emoji/lib/data/full.mjs";
 import { IMAGE_EXTS, type LinkResolver, displayName, extOf, parseLinkText } from "../lib/links";
 import { CUSTOM_CALLOUT_RE, TAG_CHARS } from "../markdown/render";
@@ -163,6 +164,15 @@ const MI_RE = /:mi-([a-z0-9_]+):/g;
 const EMOJI_RE = /:([a-z0-9_+-]+):/g;
 const HIGHLIGHT_RE = /==([^=\n]+)==/g;
 
+const LIST_PREFIX_RE = /^([ \t]*)([-*+]|\d+[.)])([ \t]+|$)(\[[ xX\-/]\][ \t]+)?/;
+
+/** Width (em) of a list item's prefix box: indentation + marker (+ checkbox). */
+function listPrefixWidth(m: RegExpExecArray): number {
+  const cols = [...m[1]].reduce((n, ch) => n + (ch === "\t" ? 4 : 1), 0);
+  const marker = m[4] ? 1.85 : /\d/.test(m[2]) ? 0.6 * m[2].length + 0.55 : 1.5;
+  return Math.round((cols * 0.75 + marker) * 100) / 100;
+}
+
 function activeLines(state: EditorState, focused: boolean): Set<number> {
   const set = new Set<number>();
   if (!focused) return set;
@@ -185,10 +195,40 @@ function build(view: EditorView, opts: LivePreviewOptions): DecorationSet {
     for (let l = a; l <= b; l++) if (active.has(l)) return true;
     return false;
   };
+  // Inline syntax (emphasis, code, links…) is revealed only for the span the cursor/selection touches,
+  // like Obsidian; block syntax (headings, quotes) still reveals per line.
+  const focused = view.hasFocus;
+  const spanActive = (from: number, to: number) => focused && state.selection.ranges.some((r) => r.from <= to && r.to >= from);
   const decos: Range<Decoration>[] = [];
   const code: [number, number][] = [];
   const lineClass = (pos: number, cls: string) => decos.push(Decoration.line({ class: cls }).range(doc.lineAt(pos).from));
   const tree = syntaxTree(state);
+
+  // Hanging indent for list items (Obsidian style): the marker sits in a fixed-width box and wrapped
+  // or continuation lines line up with the item's text, not with the line start.
+  const listIndent = (item: SyntaxNode) => {
+    const first = doc.lineAt(item.from);
+    const m = LIST_PREFIX_RE.exec(first.text);
+    if (!m) return;
+    const w = listPrefixWidth(m);
+    const style = (indent: boolean) => `padding-left: ${w}em;${indent ? ` text-indent: -${w}em;` : ""}`;
+    decos.push(Decoration.line({ class: "cm-list-line", attributes: { style: style(true) } }).range(first.from));
+    decos.push(Decoration.mark({ class: "cm-list-prefix", inclusive: true, attributes: { style: `min-width: ${w}em` } }).range(first.from, first.from + m[0].length));
+    // Continuation lines of the same item (not nested lists or code blocks).
+    const last = doc.lineAt(item.to).number;
+    if (last === first.number) return;
+    const skip: [number, number][] = [];
+    for (let c = item.firstChild; c; c = c.nextSibling)
+      if (/^(BulletList|OrderedList|FencedCode|CodeBlock|Blockquote|Table|HTMLBlock)$/.test(c.name)) skip.push([doc.lineAt(c.from).number, doc.lineAt(c.to).number]);
+    for (let l = first.number + 1; l <= last; l++) {
+      if (skip.some(([a, b]) => l >= a && l <= b)) continue;
+      const line = doc.line(l);
+      if (!line.text.trim()) continue;
+      const lead = /^[ \t]*/.exec(line.text)![0].length;
+      decos.push(Decoration.line({ class: "cm-list-line", attributes: { style: style(lead > 0) } }).range(line.from));
+      if (lead) decos.push(Decoration.mark({ class: "cm-list-prefix", inclusive: true, attributes: { style: `min-width: ${w}em` } }).range(line.from, line.from + lead));
+    }
+  };
 
   for (const { from, to } of view.visibleRanges) {
     tree.iterate({
@@ -221,14 +261,14 @@ function build(view: EditorView, opts: LivePreviewOptions): DecorationSet {
             break;
           case "EmphasisMark":
           case "StrikethroughMark":
-            if (parent && !rangeActive(parent.from, parent.to)) decos.push(hide.range(node.from, node.to));
+            if (parent && !spanActive(parent.from, parent.to)) decos.push(hide.range(node.from, node.to));
             break;
           case "InlineCode":
             code.push([node.from, node.to]);
             decos.push(Decoration.mark({ class: "cm-inline-code" }).range(node.from, node.to));
             break;
           case "CodeMark":
-            if (parent?.name === "InlineCode" && !rangeActive(parent.from, parent.to))
+            if (parent?.name === "InlineCode" && !spanActive(parent.from, parent.to))
               decos.push(hide.range(node.from, node.to));
             break;
           case "FencedCode":
@@ -269,14 +309,17 @@ function build(view: EditorView, opts: LivePreviewOptions): DecorationSet {
           case "HorizontalRule":
             if (!lineActive(node.from)) decos.push(Decoration.replace({ widget: new HrWidget() }).range(node.from, node.to));
             break;
+          case "ListItem":
+            listIndent(node.node);
+            break;
           case "ListMark": {
             const item = parent;
             const list = item?.parent;
             const after = doc.sliceString(node.to, node.to + 4);
             const isTask = /^ \[[ xX\-/]\]/.test(after);
             if (isTask) {
-              if (!lineActive(node.from)) decos.push(hide.range(node.from, node.to + 1));
-            } else if (list?.name === "BulletList" && !lineActive(node.from)) {
+              if (!spanActive(node.from, node.to)) decos.push(hide.range(node.from, node.to + 1));
+            } else if (list?.name === "BulletList" && !spanActive(node.from, node.to)) {
               decos.push(Decoration.replace({ widget: new BulletWidget() }).range(node.from, node.to));
             }
             break;
@@ -296,7 +339,7 @@ function build(view: EditorView, opts: LivePreviewOptions): DecorationSet {
             break;
           }
           case "Link": {
-            if (rangeActive(node.from, node.to)) break;
+            if (spanActive(node.from, node.to)) break;
             const marks = node.node.getChildren("LinkMark");
             const url = node.node.getChild("URL");
             if (marks.length >= 2 && url) {
@@ -314,7 +357,7 @@ function build(view: EditorView, opts: LivePreviewOptions): DecorationSet {
             return false;
           }
           case "Image": {
-            if (rangeActive(node.from, node.to)) break;
+            if (spanActive(node.from, node.to)) break;
             const url = node.node.getChild("URL");
             if (!url) break;
             const href = doc.sliceString(url.from, url.to);
@@ -360,7 +403,7 @@ function build(view: EditorView, opts: LivePreviewOptions): DecorationSet {
       const resolved = target ? resolver.resolve(target, path) : path;
       const cls = `cm-wikilink${resolved ? "" : " is-unresolved"}`;
       const attrs = { "data-target": target + (fragment ? `#${fragment}` : "") };
-      if (rangeActive(start, end)) {
+      if (spanActive(start, end)) {
         decos.push(Decoration.mark({ class: `${cls} cm-wikilink-source`, attributes: attrs }).range(start, end));
         continue;
       }
@@ -395,7 +438,7 @@ function build(view: EditorView, opts: LivePreviewOptions): DecorationSet {
     while ((m = MI_RE.exec(text))) {
       const start = from + m.index;
       const end = start + m[0].length;
-      if (inCode(start, end) || rangeActive(start, end)) continue;
+      if (inCode(start, end) || spanActive(start, end)) continue;
       decos.push(Decoration.replace({ widget: new TextWidget(m[1], "material-symbols-outlined mi-inline") }).range(start, end));
     }
 
@@ -404,7 +447,7 @@ function build(view: EditorView, opts: LivePreviewOptions): DecorationSet {
       const start = from + m.index;
       const end = start + m[0].length;
       const emoji = emojiData[m[1]];
-      if (!emoji || inCode(start, end) || rangeActive(start, end)) continue;
+      if (!emoji || inCode(start, end) || spanActive(start, end)) continue;
       decos.push(Decoration.replace({ widget: new TextWidget(emoji, "cm-emoji") }).range(start, end));
     }
 
@@ -414,7 +457,7 @@ function build(view: EditorView, opts: LivePreviewOptions): DecorationSet {
       const end = start + m[0].length;
       if (inCode(start, end)) continue;
       decos.push(Decoration.mark({ class: "cm-highlight" }).range(start, end));
-      if (!rangeActive(start, end)) {
+      if (!spanActive(start, end)) {
         decos.push(hide.range(start, start + 2));
         decos.push(hide.range(end - 2, end));
       }

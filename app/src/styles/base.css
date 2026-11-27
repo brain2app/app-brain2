@@ -138,6 +138,9 @@ kbd {
 .tree-item:hover { background: var(--bg-hover); color: var(--text-normal); }
 .tree-item.selected { background: var(--bg-hover); }
 .tree-item.active { background: var(--bg-active); color: var(--text-normal); font-weight: 500; }
+.tree-item.picked, .tree-item.picked.active { background: var(--accent-soft); color: var(--text-normal); box-shadow: inset 2px 0 0 var(--accent); }
+.tree-drag-ghost { position: fixed; top: -100px; left: -100px; padding: 4px 10px; border-radius: var(--radius-m); background: var(--accent);
+  color: var(--accent-text); font-size: 12px; font-weight: 600; }
 .tree-item.drop-target { background: var(--accent-soft); outline: 1px dashed var(--accent); }
 .tree-chevron { color: var(--text-faint); width: 16px; }
 .tree-item.file > :first-child { margin-left: 20px; }
@@ -288,7 +291,7 @@ body.resizing-col, body.resizing-col * { cursor: col-resize !important; user-sel
 @keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(0.99); } }
 
 .modal-settings { width: 920px; height: 72vh; max-height: 680px; padding: 0; overflow: hidden; }
-.modal-settings .modal-body { padding: 0; height: 100%; }
+.modal-settings > .modal-body { padding: 0; height: 100%; }
 .settings { display: flex; height: 100%; }
 .settings-nav { width: 220px; background: var(--bg-secondary); border-right: 1px solid var(--border); padding: 12px 8px; overflow: auto; flex-shrink: 0; }
 .settings-group { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); font-weight: 600; padding: 12px 10px 6px; }
@@ -304,7 +307,18 @@ body.resizing-col, body.resizing-col * { cursor: col-resize !important; user-sel
 .setting-description { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
 .setting-control { flex-shrink: 0; }
 .setting-control .input { width: 220px; }
-.skin-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.skin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.skin-previews { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; width: 100%; margin-bottom: 4px; }
+.skin-preview { display: flex; height: 54px; border: 1px solid; border-radius: var(--radius-s); overflow: hidden; }
+.skin-preview i, .skin-preview b, .skin-preview em { display: block; border-radius: 2px; }
+.skin-preview-side { width: 28%; display: flex; flex-direction: column; gap: 4px; padding: 6px 4px; }
+.skin-preview-side i { height: 3px; opacity: 0.8; }
+.skin-preview-page { flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 6px; }
+.skin-preview-page b { height: 5px; width: 60%; }
+.skin-preview-page i { height: 3px; width: 90%; opacity: 0.6; }
+.skin-preview-dots { display: flex; gap: 3px; margin-top: auto; }
+.skin-preview-dots em { width: 7px; height: 7px; border-radius: 50%; }
+.customize-skin { margin: -4px 0 8px; }
 .skin-card { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-m); text-align: left; }
 .skin-card.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .skin-swatch { width: 100%; height: 42px; border-radius: var(--radius-s); border: 1px solid var(--border); margin-bottom: 4px; }
@@ -470,3 +484,31 @@ body.resizing iframe, body.resizing canvas { pointer-events: none; }
 .connect-server-cmd { margin: 0; padding: 10px 12px; border-radius: var(--radius-m); background: var(--bg-secondary); font-size: 13px; overflow-x: auto; }
 .connect-server .connector-field { grid-template-columns: 1fr; gap: 4px; }
 .connect-server .btn-large { justify-content: center; }
+
+/* Native controls (sliders, checkboxes, radios) follow the accent color instead of the OS blue. */
+input[type="range"], input[type="checkbox"], input[type="radio"], progress { accent-color: var(--accent); }
+
+/* Font picker list (fixed so it never gets cut off by the settings panel) */
+.font-menu { position: fixed; z-index: 1000; overflow-y: auto; background: var(--bg-primary); border: 1px solid var(--border);
+  border-radius: var(--radius-m); box-shadow: var(--shadow); padding: 4px; }
+.font-option { padding: 6px 10px; border-radius: var(--radius-s, 4px); cursor: pointer; font-size: 14px; color: var(--text-normal);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.font-option.hi { background: var(--bg-hover); }
+.font-option.selected { color: var(--accent); }
+
+/* Sliders: accent for the filled part, a theme-aware track for the rest (native dark-mode track is black). */
+input[type="range"].slider { -webkit-appearance: none; appearance: none; width: 220px; height: 18px; background: transparent; cursor: pointer; }
+input[type="range"].slider::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) 0 var(--fill, 50%), color-mix(in srgb, var(--text-muted) 40%, transparent) var(--fill, 50%) 100%);
+}
+input[type="range"].slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--bg-primary); box-shadow: 0 0 0 1px var(--accent);
+}
+input[type="range"].slider:focus-visible { outline: none; }
+input[type="range"].slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--accent-soft); }
+input[type="range"].slider::-moz-range-track { height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--text-muted) 40%, transparent); }
+input[type="range"].slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
+input[type="range"].slider::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg-primary); }
+.graph-slider input[type="range"].slider { width: 100%; }

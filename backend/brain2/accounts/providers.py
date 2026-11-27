@@ -142,7 +142,19 @@ def _token_request(provider: str, config: dict[str, str], data: dict[str, str], 
         "refresh_token": body.get("refresh_token") or data.get("refresh_token"),
         "expires_at": time.time() + int(body.get("expires_in", 3600)) - 60,
     }
+    if body.get("scope"):
+        tokens["scope"] = body["scope"]
     return tokens
+
+
+MISSING_CALENDAR = ("BRAIN2 didn't get permission to read your calendars. Connect again and tick "
+                    "\"See and download any calendar you can access\" on Google's page.")
+
+
+def missing_scopes(provider: str, tokens: dict) -> bool:
+    """True when the user unticked the calendar permission on Google's consent page."""
+    granted = tokens.get("scope")
+    return provider == "google" and bool(granted) and "auth/calendar" not in granted
 
 
 def exchange_code(provider: str, config: dict[str, str], code: str, verifier: str, redirect_uri: str,
@@ -185,6 +197,8 @@ def iso_utc(dt: datetime) -> str:
 def _raise_for(r: httpx.Response, what: str) -> None:
     if r.status_code == 401:
         raise ProviderError(f"{what}: not authorized — reconnect the account")
+    if r.status_code == 403 and "insufficient" in r.text.lower():
+        raise ProviderError(MISSING_CALENDAR)
     if r.status_code >= 400:
         b = _json(r)
         msg = (b.get("error") or {}).get("message") if isinstance(b.get("error"), dict) else b.get("error")

@@ -88,7 +88,9 @@ export interface GraphData {
 
 export type ViewMode = "live" | "source" | "reading";
 
-export type BaseSkin = "typewriter" | "primary" | "blue-topaz";
+import type { SkinId } from "./skins";
+
+export type BaseSkin = SkinId;
 
 /** A user-made theme: a base skin plus colour/font overrides. Exported/imported as JSON. */
 export interface CustomTheme {
@@ -98,6 +100,8 @@ export interface CustomTheme {
   light: Record<string, string>; // CSS token (without --) -> colour
   dark: Record<string, string>;
   fonts?: { interface?: string; text?: string; mono?: string };
+  /** Started from scratch (neutral colors, system fonts) instead of a skin. */
+  blank?: boolean;
 }
 
 export interface Settings {
@@ -111,6 +115,8 @@ export interface Settings {
   fontSize: number;
   ctrlScrollZoom: boolean;
   readableLineLength: boolean;
+  /** Notes always use the light colors, even when the app is dark. */
+  documentsAlwaysLight: boolean;
   defaultViewMode: ViewMode;
   showLineNumbers: boolean;
   highlightActiveLine: boolean;
@@ -137,7 +143,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  skin: "typewriter",
+  skin: "minimal",
   customThemes: [],
   colorScheme: "system",
   accentColor: "",
@@ -147,6 +153,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fontSize: 16,
   ctrlScrollZoom: true,
   readableLineLength: false,
+  documentsAlwaysLight: false,
   defaultViewMode: "live",
   showLineNumbers: false,
   highlightActiveLine: false,
@@ -173,13 +180,15 @@ export interface BrainEvent {
   type:
     | "vaults.changed" | "vault.changed" | "vault.icons" | "settings.changed"
     | "terminals.changed" | "terminal.job" | "repos.changed" | "repo.changed" | "vault.sync"
-    | "accounts.changed" | "calendars.changed" | "events.changed";
+    | "accounts.changed" | "calendars.changed" | "events.changed" | "boards.changed" | "board.content";
+  board_id?: string;
   vault_id?: string;
   repo_id?: string;
   terminal_id?: string;
   job_id?: string;
   code?: number;
   paths?: string[];
-  origin?: "api" | "fs" | "sync";
+  origin?: "api" | "fs" | "sync" | "head";
+  branch?: string | null;
   moved?: { from: string; to: string };
 }

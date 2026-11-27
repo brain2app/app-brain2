@@ -255,3 +255,13 @@ def test_detect_provider_from_email():
     assert detect_provider("a@fam.ly", look)["provider"] == "apple"
     assert detect_provider("a@other.org", look)["provider"] is None
     assert detect_provider("not-an-email", look)["provider"] is None
+
+
+def test_google_calendar_permission_unticked():
+    from brain2.accounts import providers as P
+    assert P.missing_scopes("google", {"scope": "openid https://www.googleapis.com/auth/userinfo.email"})
+    assert not P.missing_scopes("google", {"scope": "openid https://www.googleapis.com/auth/calendar.readonly"})
+    assert not P.missing_scopes("google", {})  # provider didn't report scopes: don't block
+    r = httpx.Response(403, json={"error": {"message": "Request had insufficient authentication scopes."}})
+    with pytest.raises(P.ProviderError, match="tick"):
+        P._raise_for(r, "Calendars")

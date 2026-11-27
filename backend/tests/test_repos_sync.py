@@ -200,3 +200,33 @@ def test_attach_rejects_repo_without_main(terms, tmp_path):
 
     with pytest.raises(SyncError, match="main"):
         VaultGitSync(svc, terms).attach(v["id"], f"file://{bare}")
+
+
+def test_head_watcher_sees_terminal_checkouts(tmp_path, remote, terms):
+    db = Database(tmp_path / "db.sqlite", tmp_path / "settings.json")
+    events = []
+    svc = RepoService(db, terms, events.append)
+    work = tmp_path / "work"
+    sh(tmp_path, "git", "clone", str(remote), str(work))
+    rid = svc.register(str(work))["id"]
+    events.clear()
+    assert svc.poll_heads() == []  # first look only records HEAD
+    sh(work, "git", "switch", "-c", "feature")  # as if typed in any terminal
+    assert svc.poll_heads() == [rid]
+    assert events[-1] == {"type": "repo.changed", "repo_id": rid, "branch": "feature", "origin": "head"}
+    assert svc.poll_heads() == []
+    (work / "x.md").write_text("x")
+    sh(work, "git", "add", "-A")
+    sh(work, "git", "commit", "-m", "x")  # a commit moves HEAD too
+    assert svc.poll_heads() == [rid]
+    sh(work, "git", "switch", "--detach", "v1")
+    svc.poll_heads()
+    assert events[-1]["branch"] is None
+    # Worktrees (.git is a file) are followed as well.
+    wt = tmp_path / "wt"
+    sh(work, "git", "worktree", "add", "-b", "side", str(wt))
+    wid = svc.register(str(wt))["id"]
+    svc.poll_heads()
+    sh(wt, "git", "switch", "main")
+    assert wid in svc.poll_heads() and events[-1]["branch"] == "main"
+    db.close()

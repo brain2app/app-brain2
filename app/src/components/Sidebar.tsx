@@ -6,6 +6,7 @@ import { VaultSidebar } from "../views/VaultSidebar";
 import { RepoSidebar } from "../repos/RepoView";
 import { useRepos } from "../repos/store";
 import { useCalendars } from "../calendars/store";
+import { useBoards } from "../boards/store";
 import { useTerminals } from "../terminal/store";
 import { startVaultSync } from "../vaultSync";
 import { Icon, UserIcon } from "./Icon";
@@ -18,6 +19,7 @@ export const MODULES = [
   { id: "calendars", label: "Calendars", icon: "calendar_month", unit: "calendars" },
   { id: "boards", label: "Boards", icon: "view_kanban", unit: "boards" },
   { id: "echoes", label: "Echoes", icon: "graphic_eq", unit: "echoes" },
+  { id: "workflows", label: "Workflow", icon: "conversion_path", unit: "workflows", soon: true },
 ] as const;
 
 export function Sidebar() {
@@ -46,6 +48,7 @@ function ModuleList() {
   const vaults = useApp((s) => s.vaults);
   const repoCount = useRepos((s) => s.repos.length);
   const calendarCount = useCalendars((s) => s.calendars.length);
+  const boardCount = useBoards((s) => s.boards.length);
   const navigate = useApp((s) => s.navigate);
   const route = useApp((s) => s.route);
   return (
@@ -55,8 +58,8 @@ function ModuleList() {
       </button>
       <nav className="module-list">
         {MODULES.map((m) => {
-          const count = m.id === "vaults" ? vaults.length : m.id === "repos" ? repoCount : m.id === "calendars" ? calendarCount : 0;
-          const active = route.module === "coming" ? route.name === m.id : route.module === m.id || (m.id === "calendars" && route.module === "calendar");
+          const count = m.id === "vaults" ? vaults.length : m.id === "repos" ? repoCount : m.id === "calendars" ? calendarCount : m.id === "boards" ? boardCount : 0;
+          const active = route.module === "coming" ? route.name === m.id : route.module === m.id || (m.id === "calendars" && route.module === "calendar") || (m.id === "boards" && route.module === "board");
           return (
             <button
               key={m.id}
@@ -68,14 +71,16 @@ function ModuleList() {
                     ? navigate({ module: "repos" })
                     : m.id === "calendars"
                       ? navigate({ module: "calendars" })
-                      : navigate({ module: "coming", name: m.id })
+                      : m.id === "boards"
+                        ? navigate({ module: "boards" })
+                        : navigate({ module: "coming", name: m.id })
               }
             >
               <Icon name={m.icon} size={20} />
               <span className="module-text">
                 <span className="module-label">{m.label}</span>
                 <span className="module-count">
-                  {count} local {m.unit}
+                  {"soon" in m ? "Coming soon" : `${count} local ${m.unit}`}
                 </span>
               </span>
               <Icon name="chevron_right" size={18} className="module-arrow" />

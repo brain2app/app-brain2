@@ -72,6 +72,61 @@ export async function movePath(src: string, dst: string) {
   }
 }
 
+/** Drops paths that sit inside another path of the list (moving/deleting the folder covers them). */
+export function topLevel(paths: string[]): string[] {
+  const set = [...new Set(paths)];
+  return set.filter((p) => !set.some((q) => q !== p && p.startsWith(q + "/")));
+}
+
+/** Moves several files/folders into ``folder`` ("" = vault root), keeping open tabs on them. */
+export async function movePaths(paths: string[], folder: string) {
+  const todo = topLevel(paths).filter((p) => dirname(p) !== folder && p !== folder && !folder.startsWith(p + "/"));
+  if (!todo.length) return;
+  await flushSaves();
+  const renames: [string, string][] = [];
+  const failed: string[] = [];
+  let linksUpdated = 0;
+  for (const src of todo) {
+    try {
+      const res = await api.move(vaultId(), src, folder ? `${folder}/${basename(src)}` : basename(src), app().settings.updateLinksOnMove);
+      renames.push([src, res.path]);
+      linksUpdated += res.updated_links_in?.length ?? 0;
+    } catch (e) {
+      failed.push(`${basename(src)}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  await ws().refresh({ renames });
+  ws().set({ picked: ws().picked.map((p) => renames.find(([a]) => a === p)?.[1] ?? p) });
+  if (failed.length) app().toast(`Couldn't move ${failed.length} item${failed.length > 1 ? "s" : ""}:\n${failed.join("\n")}`, "error");
+  else if (renames.length > 1 || linksUpdated)
+    app().toast(`Moved ${renames.length} item${renames.length > 1 ? "s" : ""}${linksUpdated ? ` · updated links in ${linksUpdated} note${linksUpdated > 1 ? "s" : ""}` : ""}`);
+}
+
+/** Deletes several files/folders (to the vault trash) after one confirmation. */
+export async function deletePaths(paths: string[]) {
+  const todo = topLevel(paths);
+  if (!todo.length) return;
+  if (todo.length === 1) return deletePath(todo[0], !ws().files.some((f) => f.path === todo[0]));
+  if (app().settings.confirmDelete) {
+    const ok = await confirmDialog("Delete items", `Move these ${todo.length} items (and everything inside the folders) to the vault trash (.brain2/trash)?`, {
+      okLabel: `Delete ${todo.length} items`,
+      danger: true,
+    });
+    if (!ok) return;
+  }
+  await flushSaves();
+  for (const p of todo) {
+    try {
+      await api.remove(vaultId(), p);
+      ws().dropPaths(p);
+    } catch (e) {
+      reportError(e);
+    }
+  }
+  ws().set({ picked: [] });
+  await ws().refresh();
+}
+
 export async function deletePath(path: string, isFolder: boolean) {
   if (app().settings.confirmDelete) {
     const ok = await confirmDialog(

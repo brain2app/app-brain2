@@ -11,7 +11,7 @@ const GROUPS: { kind: ProviderKind; title: string; description: string; add: str
   {
     kind: "account",
     title: "Account providers",
-    description: "Google, Microsoft and Apple accounts. Calendars use them today; email comes later.",
+    description: "Google and Microsoft accounts. Calendars use them today; email comes later.",
     add: "Add account",
     empty: "No accounts connected yet.",
   },
@@ -291,44 +291,6 @@ function SecretConnect({ provider, onDone, startOpen = false }: { provider: Prov
   );
 }
 
-/** "Add account" first step: type an email, BRAIN2 finds the provider (Google, Microsoft, iCloud). */
-function EmailStart({ onFound }: { onFound: (provider: string | null, email: string) => void }) {
-  const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
-  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-  const go = async () => {
-    if (!valid || busy) return;
-    setBusy(true);
-    try {
-      const d = await accountsApi.detect(email.trim());
-      onFound(d.provider, d.email);
-    } catch (e) {
-      reportError(e);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="email-start">
-      <label className="connector-field">
-        <span>Email address</span>
-        <input
-          className="input"
-          type="email"
-          autoFocus
-          placeholder="you@gmail.com"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && go()}
-        />
-      </label>
-      <button className="btn btn-primary" disabled={!valid || busy} onClick={go}>
-        {busy ? "Checking…" : "Continue"}
-      </button>
-    </div>
-  );
-}
-
 /** "Add account" flow: type an email (account providers) or pick a provider, then connect it. */
 function AddAccountDialog({
   kind,
@@ -346,20 +308,7 @@ function AddAccountDialog({
   const [pickedId, setPickedId] = useState<string | null>(providers.length === 1 ? providers[0].id : null);
   const picked = providers.find((p) => p.id === pickedId) ?? null;
   const [setup, setSetup] = useState(false);
-  const [email, setEmail] = useState<string | undefined>(undefined);
-  const [unknown, setUnknown] = useState<string | null>(null);
-  const emailFirst = kind === "account";
-  const onFound = (provider: string | null, address: string) => {
-    const p = providers.find((x) => x.id === provider);
-    if (!p) {
-      setUnknown(address);
-      return;
-    }
-    setUnknown(null);
-    setEmail(address);
-    setPickedId(p.id);
-    setSetup(p.needs_setup && !p.configured);
-  };
+  const [autoStart, setAutoStart] = useState(false);
   const done = () => {
     onChanged();
     onClose();
@@ -369,7 +318,7 @@ function AddAccountDialog({
       title={
         <>
           {picked && providers.length > 1 && (
-            <button className="icon-button" title="Back" onClick={() => (setPickedId(null), setSetup(false), setEmail(undefined))}>
+            <button className="icon-button" title="Back" onClick={() => (setPickedId(null), setSetup(false), setAutoStart(false))}>
               <Icon name="arrow_back" size={18} />
             </button>
           )}
@@ -382,34 +331,22 @@ function AddAccountDialog({
     >
       {!picked ? (
         <>
-          {emailFirst && (
-            <>
-              <p className="muted small">Type the email of the account you want to connect. You can add as many accounts as you like.</p>
-              <EmailStart onFound={onFound} />
-              {unknown && (
-                <p className="small warning-text">
-                  BRAIN2 couldn't tell who hosts {unknown}. Choose the provider below.
-                </p>
-              )}
-              <div className="email-start-or muted tiny">or choose a provider</div>
-            </>
-          )}
-          {!emailFirst && (
-            <p className="muted small">Choose a provider. You can add several accounts of the same provider — each one is listed separately.</p>
-          )}
+          <p className="muted small">Choose a provider. You can add several accounts of the same provider — each one is listed separately.</p>
           <div className="provider-grid">
             {providers.map((p) => (
               <button
                 key={p.id}
                 className="provider-choice"
-                onClick={() => (setPickedId(p.id), setSetup(p.needs_setup && !p.configured), setEmail(unknown ?? undefined))}
+                onClick={() => (
+                  setPickedId(p.id), setSetup(p.needs_setup && !p.configured), setAutoStart(p.connect === "oauth" && p.configured)
+                )}
               >
-                <Icon name={p.icon} size={24} />
+                {p.id === "google" ? <GoogleMark size={24} /> : <Icon name={p.icon} size={24} />}
                 <span className="provider-choice-text">
-                  <strong>{p.name}</strong>
-                  <span className="muted tiny">{connectLabel(p)}</span>
+                  <strong>{p.id === "google" && p.configured ? "Sign in with Google" : p.name}</strong>
+                  <span className="muted tiny provider-choice-sub" title={connectLabel(p)}>{connectLabel(p)}</span>
+                  {!p.usable && <span className="kind-badge">not used yet</span>}
                 </span>
-                {!p.usable && <span className="kind-badge">not used yet</span>}
               </button>
             ))}
           </div>
@@ -419,16 +356,16 @@ function AddAccountDialog({
           {!picked.needs_setup && <p className="muted small">{picked.help}</p>}
           {picked.connect === "oauth" && picked.configured && !setup && (
             <p className="muted small">
-              {email ? "Your browser opens Google's sign-in page for this account. " : "Your browser opens the sign-in page. "}
+              Your browser opens {picked.name}'s sign-in page; pick your account there.{" "}
               Approve access there, then come back to BRAIN2. BRAIN2 never sees your password.
             </p>
           )}
           {(!picked.needs_setup || (picked.configured && !setup)) && (
             <div className="connector-actions">
               {picked.connect === "oauth" ? (
-                <OAuthConnect provider={picked} onDone={done} email={email} autoStart={!!email} />
+                <OAuthConnect provider={picked} onDone={done} autoStart={autoStart} />
               ) : picked.connect === "password" ? (
-                <AppleConnect onDone={done} startOpen email={email} />
+                <AppleConnect onDone={done} startOpen />
               ) : (
                 <SecretConnect provider={picked} onDone={done} startOpen />
               )}
@@ -449,6 +386,21 @@ function AddAccountDialog({
     </Modal>
   );
 }
+
+/** Google's "G" mark, for the Sign in with Google button. */
+function GoogleMark({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} className="google-mark" viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.2l7.9 6.2C12.5 13.6 17.8 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z" />
+      <path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.2C1 16.6 0 20.2 0 24s1 7.4 2.7 10.8l7.9-6.2z" />
+      <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.8-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.4 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.2C6.6 42.6 14.6 48 24 48z" />
+    </svg>
+  );
+}
+
+/** Providers not offered for new connections for now (existing accounts still show). */
+const HIDDEN_PROVIDERS = new Set(["apple"]);
 
 export function ConnectorsSection() {
   const { data, load } = useConnectors();
@@ -488,7 +440,7 @@ export function ConnectorsSection() {
         <AddAccountDialog
           kind={group.kind}
           title={group.add}
-          providers={data.providers.filter((p) => p.kind === group.kind)}
+          providers={data.providers.filter((p) => p.kind === group.kind && !HIDDEN_PROVIDERS.has(p.id))}
           onClose={() => setAdding(null)}
           onChanged={load}
         />

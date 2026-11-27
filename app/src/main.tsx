@@ -16,10 +16,13 @@ import "./styles/editor.css";
 import "./styles/markdown.css";
 import "./styles/modules.css";
 import "./styles/calendar.css";
+import "./styles/boards.css";
+import { installSkins } from "./lib/skins";
 import { App } from "./App";
 import { ConnectServer } from "./components/ConnectServer";
 import { isNativeMobile, savedServer } from "./lib/bridge";
 
+installSkins();
 const root = createRoot(document.getElementById("root")!);
 // The Android app first needs to know which BRAIN2 server to use, and that it is reachable.
 const server = isNativeMobile ? savedServer() : null;

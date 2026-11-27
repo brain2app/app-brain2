@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "./lib/api";
+import { normalizeSettings } from "./lib/theme";
 import { LinkResolver, dirname } from "./lib/links";
 import {
   DEFAULT_SETTINGS,
@@ -14,11 +15,13 @@ import {
 export type Route =
   | { module: "dashboard" }
   | { module: "vaults" }
-  | { module: "vault"; vaultId: string }
+  | { module: "vault"; vaultId: string; file?: string }
   | { module: "repos" }
   | { module: "repo"; repoId: string; page?: RepoPage; arg?: string }
   | { module: "calendars" }
   | { module: "calendar"; calendarId: string }
+  | { module: "boards" }
+  | { module: "board"; boardId: string }
   | { module: "coming"; name: string };
 
 export type RepoPage = "files" | "commits" | "pushes" | "branches" | "tags" | "pulls";
@@ -80,7 +83,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   async loadSettings() {
     const stored = await api.getSettings();
-    set({ settings: { ...DEFAULT_SETTINGS, ...(stored as Partial<Settings>) } });
+    set({ settings: normalizeSettings({ ...DEFAULT_SETTINGS, ...(stored as Partial<Settings>) }) });
   },
   async updateSettings(patch) {
     set({ settings: { ...get().settings, ...patch } });
@@ -176,6 +179,8 @@ interface WorkspaceState {
   focusedPane: Pane;
   expanded: Record<string, boolean>;
   selected: string | null;
+  /** Document explorer multi-selection (Cmd/Ctrl+click, Shift+click), in click order. */
+  picked: string[];
   leftTab: "files" | "search" | "tags";
   leftOpen: boolean;
   rightOpen: boolean;
@@ -186,7 +191,7 @@ interface WorkspaceState {
 
   openVault(vaultId: string): Promise<void>;
   closeVault(): void;
-  refresh(opts?: { rename?: [string, string] }): Promise<void>;
+  refresh(opts?: { rename?: [string, string]; renames?: [string, string][] }): Promise<void>;
   loadIcons(): Promise<void>;
   openFile(path: string, opts?: { newTab?: boolean; line?: number; heading?: string; mode?: ViewMode }): void;
   openGraph(): void;
@@ -309,6 +314,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   focusedPane: 0,
   expanded: {},
   selected: null,
+  picked: [],
   leftTab: "files",
   leftOpen: true,
   rightOpen: true,
@@ -331,6 +337,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       focusedPane: 0,
       expanded: {},
       selected: null,
+      picked: [],
       searchQuery: "",
       dirty: {},
       leftOpen: true,
@@ -363,9 +370,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const [tree, files, icons] = await Promise.all([api.tree(id), api.files(id), api.icons(id).catch(() => ({}))]);
     if (get().vaultId !== id) return;
     // Applying a rename in the same update keeps open editors mounted.
-    const renamed = opts.rename ? renamePatch(get(), ...opts.rename) : {};
+    const pairs = [...(opts.rename ? [opts.rename] : []), ...(opts.renames ?? [])];
+    let renamed: Partial<WorkspaceState> = {};
+    for (const [from, to] of pairs) renamed = { ...renamed, ...renamePatch({ ...get(), ...renamed }, from, to) };
     set({ tree, files, icons, resolver: new LinkResolver(files.map((f) => f.path)), revision: get().revision + 1, ...renamed });
-    if (opts.rename) persist(get());
+    if (pairs.length) persist(get());
   },
   openFile(path, opts = {}) {
     const s = get();

@@ -15,10 +15,11 @@ import type {
   Blob, Branch, CommandResult, Commit, CommitDetail, PullList, PushEvent, Refs, Repo, RepoInspect, RepoTree, SyncResult,
   Tag, TerminalInfo, VaultGitStatus,
 } from "./repoTypes";
+import type { BoardInfo, BoardTemplate, GhBoard, GhProjectRef, VaultKanban } from "./boardTypes";
 import type { Account, CalEvent, Calendar, CalendarSource, Connectors, DetectedProvider, EventInput, OAuthFlow, OAuthStatus, RemoteCalendar } from "./calTypes";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public command?: string[]) {
     super(message);
   }
 }
@@ -38,12 +39,15 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
   });
   if (!res.ok) {
     let msg = res.statusText;
+    let command: string[] | undefined;
     try {
-      msg = (await res.json()).detail ?? msg;
+      const body = await res.json();
+      msg = body.detail ?? msg;
+      if (Array.isArray(body.command)) command = body.command;
     } catch {
       /* not json */
     }
-    throw new ApiError(res.status, typeof msg === "string" ? msg : JSON.stringify(msg));
+    throw new ApiError(res.status, typeof msg === "string" ? msg : JSON.stringify(msg), command);
   }
   return res.json() as Promise<T>;
 }
@@ -110,6 +114,8 @@ export const api = {
     request<TerminalInfo>("POST", "/api/terminals", body),
   renameTerminal: (id: string, title: string) => request<TerminalInfo>("PATCH", t(id), { title }),
   closeTerminal: (id: string) => request<{ ok: true }>("DELETE", t(id)),
+  terminalRun: (id: string, command: string[] | string, cwd?: string) =>
+    request<{ job_id: string }>("POST", `${t(id)}/run`, { command, cwd }),
   terminalCd: (id: string, path: string) => request<{ job_id: string }>("POST", `${t(id)}/cd`, undefined, { path }),
 
   // repos
@@ -182,6 +188,33 @@ export const calendarApi = {
   createEvent: (calendarId: string, body: EventInput) => request<CalEvent>("POST", `${c(calendarId)}/events`, body),
   updateEvent: (eventId: string, body: Partial<EventInput>) => request<CalEvent>("PATCH", `/api/events/${encodeURIComponent(eventId)}`, body),
   deleteEvent: (eventId: string) => request<{ ok: true }>("DELETE", `/api/events/${encodeURIComponent(eventId)}`),
+};
+
+const b = (id: string) => `/api/boards/${encodeURIComponent(id)}`;
+
+export const boardApi = {
+  list: () => request<BoardInfo[]>("GET", "/api/boards"),
+  create: (body: { name: string; kind?: BoardInfo["kind"]; config?: BoardInfo["config"]; template?: BoardTemplate; icon?: string }) =>
+    request<BoardInfo>("POST", "/api/boards", body),
+  update: (id: string, body: Partial<Pick<BoardInfo, "name" | "icon" | "config" | "sort_order">>) => request<BoardInfo>("PATCH", b(id), body),
+  remove: (id: string) => request<{ ok: true }>("DELETE", b(id)),
+  content: (id: string) => request<{ content: string; mtime: number }>("GET", `${b(id)}/content`),
+  saveContent: (id: string, content: string) => request<{ mtime: number }>("PUT", `${b(id)}/content`, { content }),
+  vaultKanbans: () => request<VaultKanban[]>("GET", "/api/boards/sources/vault"),
+  githubProjects: () => request<GhProjectRef[]>("GET", "/api/boards/sources/github"),
+  github: (id: string) => request<GhBoard>("GET", `${b(id)}/github`),
+  githubMove: (id: string, body: { project_id: string; field_id: string; item_id: string; option_id: string | null }) =>
+    request<{ ok: true }>("POST", `${b(id)}/github/move`, body),
+  githubAdd: (id: string, body: { project_id: string; field_id: string; title: string; body?: string; option_id: string | null }) =>
+    request<{ id: string }>("POST", `${b(id)}/github/items`, body),
+  githubEditDraft: (id: string, body: { draft_id: string; title: string; body?: string | null }) =>
+    request<{ ok: true }>("POST", `${b(id)}/github/draft`, body),
+  githubEdit: (id: string, body: { kind: string; content_id: string; title: string; body?: string | null }) =>
+    request<{ ok: true }>("POST", `${b(id)}/github/edit`, body),
+  githubDelete: (id: string, body: { project_id: string; item_id: string }) => request<{ ok: true }>("POST", `${b(id)}/github/delete`, body),
+  githubColumn: (id: string, body: { field_id: string; action: "add" | "rename" | "delete"; name?: string; option_id?: string }) =>
+    request<{ ok: true }>("POST", `${b(id)}/github/columns`, body),
+  githubArchive: (id: string, body: { project_id: string; item_id: string }) => request<{ ok: true }>("POST", `${b(id)}/github/archive`, body),
 };
 
 export function terminalSocketUrl(id: string): string {

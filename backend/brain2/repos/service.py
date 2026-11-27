@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -37,6 +38,57 @@ CREATE TABLE IF NOT EXISTS repos (
 SEP = "\x1f"
 REC = "\x1e"
 MAX_FILE_BYTES = 2 * 1024 * 1024
+
+
+def git_dirs(repo: Path) -> tuple[Path, Path] | None:
+    """(git dir, common dir) of a working tree, without running git (``.git`` may be a file for worktrees)."""
+    dot = repo / ".git"
+    if dot.is_dir():
+        return dot, dot
+    if dot.is_file():
+        text = dot.read_text(errors="replace").strip()
+        if text.startswith("gitdir:"):
+            gd = Path(text[7:].strip())
+            gd = gd if gd.is_absolute() else (repo / gd).resolve()
+            common = gd
+            cf = gd / "commondir"
+            if cf.is_file():
+                c = Path(cf.read_text().strip())
+                common = c if c.is_absolute() else (gd / c).resolve()
+            return gd, common
+    return None
+
+
+def head_signature(repo: Path) -> tuple | None:
+    """Cheap fingerprint of HEAD: changes on checkout/switch, commit, pull, reset (reads files only)."""
+    dirs = git_dirs(repo)
+    if not dirs:
+        return None
+    gd, common = dirs
+    try:
+        head = (gd / "HEAD").read_text(errors="replace").strip()
+    except OSError:
+        return None
+    sha = None
+    if head.startswith("ref: "):
+        ref = common / head[5:]
+        try:
+            sha = ref.read_text().strip()
+        except OSError:
+            sha = None
+    packed = common / "packed-refs"
+    try:
+        pm = packed.stat().st_mtime_ns
+    except OSError:
+        pm = 0
+    return head, sha, pm
+
+
+def head_branch(sig: tuple | None) -> str | None:
+    if not sig:
+        return None
+    head = sig[0]
+    return head[16:] if head.startswith("ref: refs/heads/") else None
 
 
 class RepoError(Exception):
@@ -99,6 +151,51 @@ class RepoService:
         self.publish = publish or (lambda ev: None)
         with db._lock:  # noqa: SLF001 - module-owned table
             db._conn.executescript(SCHEMA)  # noqa: SLF001
+        self._heads: dict[str, tuple | None] = {}
+        self._stop = threading.Event()
+        self._watcher: threading.Thread | None = None
+
+    # ---------------------------------------------------------------- HEAD watcher
+    def poll_heads(self) -> list[str]:
+        """Compare every repo's HEAD with the last look; publish ``repo.changed`` for those that moved
+        (a ``git checkout``/commit/pull made in any terminal shows up in the UI)."""
+        changed: list[str] = []
+        rows = self.db.query("SELECT id, path FROM repos")
+        seen = set()
+        for r in rows:
+            rid = r["id"]
+            seen.add(rid)
+            sig = head_signature(Path(r["path"]))
+            if rid in self._heads and self._heads[rid] != sig:
+                changed.append(rid)
+                self.publish({"type": "repo.changed", "repo_id": rid, "branch": head_branch(sig), "origin": "head"})
+            self._heads[rid] = sig
+        for rid in list(self._heads):
+            if rid not in seen:
+                del self._heads[rid]
+        return changed
+
+    def start_watching(self, interval: float = 1.0) -> None:
+        if self._watcher:
+            return
+        self._stop.clear()
+        self.poll_heads()
+
+        def loop() -> None:
+            while not self._stop.wait(interval):
+                try:
+                    self.poll_heads()
+                except Exception:  # noqa: BLE001 - keep watching whatever happens
+                    pass
+
+        self._watcher = threading.Thread(target=loop, name="repo-heads", daemon=True)
+        self._watcher.start()
+
+    def stop_watching(self) -> None:
+        self._stop.set()
+        if self._watcher:
+            self._watcher.join(timeout=3)
+            self._watcher = None
 
     # ---------------------------------------------------------------- registry
     def _row(self, repo_id: str) -> dict[str, Any]:

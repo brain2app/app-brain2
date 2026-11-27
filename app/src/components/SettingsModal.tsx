@@ -2,9 +2,10 @@ import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { bridge, isNativeMobile, modKey, saveServer } from "../lib/bridge";
 import {
-  BASE_PALETTES, BASE_SKINS, BUNDLED_FONTS, COMMON_FONTS, THEME_TOKENS, activeCustomTheme, localFonts, newCustomTheme,
-  parseThemeJson, themeToJson,
+  BASE_PALETTES, BASE_SKINS, BUNDLED_FONTS, COMMON_FONTS, THEME_TOKENS, activeCustomTheme, localFonts, newBlankTheme,
+  newCustomTheme, parseThemeJson, startPalette, themeToJson,
 } from "../lib/theme";
+import { SKIN_DEFS, type SkinDef, migrateSkinId } from "../lib/skins";
 import type { BaseSkin, CustomTheme, Settings } from "../lib/types";
 import { useApp } from "../store";
 import { Icon } from "./Icon";
@@ -24,11 +25,30 @@ const SECTIONS: { id: string; label: string; icon: string; group: string }[] = [
   { id: "sync", label: "Sync & data", icon: "sync", group: "Options" },
 ];
 
-export const SKINS: { id: BaseSkin; name: string; description: string }[] = [
-  { id: "typewriter", name: "Typewriter", description: "Default. Calm, monospaced writing focus." },
-  { id: "primary", name: "Primary", description: "Soft, friendly and colourful." },
-  { id: "blue-topaz", name: "Blue Topaz", description: "Airy blues with colourful headings." },
-];
+export const SKINS = SKIN_DEFS;
+
+/** A tiny picture of a theme: sidebar, page, heading colours, text lines and accent. */
+function SkinPreview({ def, dark }: { def: SkinDef; dark: boolean }) {
+  const c = dark ? def.dark : def.light;
+  return (
+    <span className="skin-preview" style={{ background: c.bg1, borderColor: c.border }} aria-hidden>
+      <span className="skin-preview-side" style={{ background: c.bg2 }}>
+        <i style={{ background: c.accent }} />
+        <i style={{ background: c.faint }} />
+        <i style={{ background: c.faint }} />
+      </span>
+      <span className="skin-preview-page">
+        <b style={{ background: c.headings[0] }} />
+        <i style={{ background: c.muted }} />
+        <i style={{ background: c.muted, width: "70%" }} />
+        <span className="skin-preview-dots">
+          {c.headings.slice(1, 5).map((h, i) => <em key={i} style={{ background: h }} />)}
+          <em style={{ background: c.link }} />
+        </span>
+      </span>
+    </span>
+  );
+}
 
 function Row({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
   return (
@@ -59,34 +79,153 @@ function currentAccentHex(): string {
 
 let fontCache: Promise<string[]> | null = null;
 
-/** Free-text font family with suggestions (bundled fonts, common fonts, installed fonts). */
+/** Fonts that can actually be used here: bundled ones, then installed ones (like Obsidian's font list). */
+function availableFonts(): Promise<string[]> {
+  fontCache ??= localFonts().then((installed) => {
+    // Without the Local Font Access API, keep only the common fonts this system really has.
+    const fallback = installed.length ? [] : COMMON_FONTS.filter((f) => f.startsWith("system") || fontInstalled(f));
+    return [...new Set([...BUNDLED_FONTS, ...fallback, ...installed])];
+  });
+  return fontCache;
+}
+
+function fontInstalled(name: string): boolean {
+  try {
+    const c = document.createElement("canvas").getContext("2d");
+    if (!c) return false;
+    const probe = "mmmmmmmmmlli10";
+    c.font = "32px monospace";
+    const mono = c.measureText(probe).width;
+    c.font = "32px serif";
+    const serif = c.measureText(probe).width;
+    c.font = `32px "${name}", monospace`;
+    const a = c.measureText(probe).width;
+    c.font = `32px "${name}", serif`;
+    const b = c.measureText(probe).width;
+    return a !== mono || b !== serif;
+  } catch {
+    return false;
+  }
+}
+
+/** Font picker: type to filter, scrollable list (each font shown in itself), or type any family name. */
 function FontInput({ value, onChange, mono }: { value: string; onChange: (v: string) => void; mono?: boolean }) {
   const [fonts, setFonts] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hi, setHi] = useState(0);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number; maxHeight: number } | null>(null);
+  const wrap = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const id = useId();
   useEffect(() => {
-    fontCache ??= localFonts();
-    fontCache.then(setFonts);
+    availableFonts().then(setFonts);
   }, []);
-  const options = [...new Set([...BUNDLED_FONTS, ...COMMON_FONTS, ...fonts])];
+  const q = query.trim().toLowerCase();
+  const shown = q ? fonts.filter((f) => f.toLowerCase().includes(q)) : fonts;
+
+  const place = () => {
+    const r = wrap.current?.getBoundingClientRect();
+    if (!r) return;
+    const below = window.innerHeight - r.bottom - 12;
+    const above = r.top - 12;
+    const width = Math.max(r.width, 260);
+    const left = Math.min(r.left, window.innerWidth - width - 8);
+    if (below >= 220 || below >= above) setPos({ left, top: r.bottom + 4, width, maxHeight: Math.min(320, below) });
+    else setPos({ left, bottom: window.innerHeight - r.top + 4, width, maxHeight: Math.min(320, above) });
+  };
+  const show = () => {
+    place();
+    setQuery("");
+    setHi(Math.max(0, fonts.indexOf(value)));
+    setOpen(true);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e.type === "mousedown" && (wrap.current?.contains(e.target as Node) || listRef.current?.contains(e.target as Node))) return;
+      if (e.type === "scroll" && listRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>(`[data-i="${hi}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [hi, open]);
+  const pick = (f: string) => {
+    onChange(f);
+    setOpen(false);
+  };
   return (
-    <div className="font-input">
+    <div className="font-input" ref={wrap}>
       <input
         className="input"
-        list={id}
-        value={value}
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={id}
+        value={open ? query || value : value}
         placeholder="Skin default"
         style={value ? { fontFamily: `"${value}", ${mono ? "monospace" : "sans-serif"}` } : undefined}
-        onChange={(e) => onChange(e.target.value)}
+        onFocus={show}
+        onClick={() => !open && show()}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setHi(0);
+          if (!open) show();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") (e.preventDefault(), setHi((h) => Math.min(h + 1, shown.length - 1)));
+          else if (e.key === "ArrowUp") (e.preventDefault(), setHi((h) => Math.max(h - 1, 0)));
+          else if (e.key === "Enter") pick(shown[hi] ?? query.trim());
+          else if (e.key === "Escape") setOpen(false);
+        }}
+        onBlur={() => {
+          // A typed family name that isn't in the list is still accepted.
+          if (query.trim() && !listRef.current?.matches(":hover")) onChange(query.trim());
+        }}
       />
-      <datalist id={id}>
-        {options.map((f) => (
-          <option key={f} value={f} />
-        ))}
-      </datalist>
+      <button className="icon-button" title="Choose a font" tabIndex={-1} onMouseDown={(e) => (e.preventDefault(), open ? setOpen(false) : show())}>
+        <Icon name="expand_more" size={16} />
+      </button>
       {value && (
         <button className="icon-button" title="Use skin default" onClick={() => onChange("")}>
           <Icon name="close" size={16} />
         </button>
+      )}
+      {open && pos && (
+        <div
+          ref={listRef}
+          id={id}
+          role="listbox"
+          className="font-menu"
+          style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight }}
+        >
+          {shown.length ? (
+            shown.map((f, i) => (
+              <div
+                key={f}
+                data-i={i}
+                role="option"
+                aria-selected={f === value}
+                className={`font-option${i === hi ? " hi" : ""}${f === value ? " selected" : ""}`}
+                style={{ fontFamily: `"${f}", ${mono ? "monospace" : "sans-serif"}` }}
+                onMouseEnter={() => setHi(i)}
+                onMouseDown={(e) => (e.preventDefault(), pick(f))}
+              >
+                {f}
+              </div>
+            ))
+          ) : (
+            <div className="font-option muted">Press Enter to use “{query.trim()}”</div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -103,7 +242,7 @@ function downloadText(filename: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const SKIN_NAME: Record<BaseSkin, string> = { typewriter: "Typewriter", primary: "Primary", "blue-topaz": "Blue Topaz" };
+const SKIN_NAME = Object.fromEntries(SKIN_DEFS.map((d) => [d.id, d.name])) as Record<BaseSkin, string>;
 
 /** List + editor for user-made themes (skin "custom:<id>"). */
 function CustomThemes({ settings, update }: { settings: Settings; update: (p: Partial<Settings>) => void }) {
@@ -111,7 +250,7 @@ function CustomThemes({ settings, update }: { settings: Settings; update: (p: Pa
   const active = activeCustomTheme(settings);
   const prefersDark = document.documentElement.dataset.theme === "dark";
   const [mode, setMode] = useState<"light" | "dark">(prefersDark ? "dark" : "light");
-  const [newBase, setNewBase] = useState<BaseSkin>(active?.base ?? "typewriter");
+  const [newBase, setNewBase] = useState<BaseSkin | "blank">("blank");
   const [error, setError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -146,11 +285,15 @@ function CustomThemes({ settings, update }: { settings: Settings; update: (p: Pa
       <h3>Custom themes</h3>
       <div className="row wrap">
         <select className="select" value={newBase} onChange={(e) => setNewBase(e.target.value as BaseSkin)} title="Base skin for the new theme">
+          <option value="blank">From scratch (blank)</option>
           {BASE_SKINS.map((b) => (
             <option key={b} value={b}>Based on {SKIN_NAME[b]}</option>
           ))}
         </select>
-        <button className="btn btn-small" onClick={() => add(newCustomTheme(newBase, uniqueName("My theme")))}>
+        <button
+          className="btn btn-small"
+          onClick={() => add(newBase === "blank" ? newBlankTheme(uniqueName("My theme")) : newCustomTheme(newBase, uniqueName("My theme")))}
+        >
           <Icon name="add" size={16} /> New theme
         </button>
         <button className="btn btn-small" onClick={() => fileRef.current?.click()}>
@@ -168,7 +311,7 @@ function CustomThemes({ settings, update }: { settings: Settings; update: (p: Pa
                 style={{ background: `linear-gradient(135deg, ${t.light["bg-primary"]} 50%, ${t.light.accent} 50%)` }}
               />
               <span className="theme-name">{t.name}</span>
-              <span className="muted small">{SKIN_NAME[t.base]}</span>
+              <span className="muted small">{t.blank ? "Blank" : SKIN_NAME[t.base]}</span>
               <span className="spacer" />
               <button
                 className="icon-button"
@@ -210,13 +353,19 @@ function CustomThemes({ settings, update }: { settings: Settings; update: (p: Pa
             <input className="input" value={active.name} onChange={(e) => patch(active.id, { name: e.target.value })} placeholder="Theme name" />
             <select
               className="select"
-              value={active.base}
+              value={active.blank ? "blank" : active.base}
               title="Base skin"
               onChange={(e) => {
+                if (e.target.value === "blank") {
+                  const b = newBlankTheme(active.name);
+                  patch(active.id, { blank: true, base: b.base, light: b.light, dark: b.dark, fonts: b.fonts });
+                  return;
+                }
                 const base = e.target.value as BaseSkin;
-                patch(active.id, { base, light: { ...BASE_PALETTES[base].light }, dark: { ...BASE_PALETTES[base].dark } });
+                patch(active.id, { base, blank: false, light: { ...BASE_PALETTES[base].light }, dark: { ...BASE_PALETTES[base].dark } });
               }}
             >
+              <option value="blank">Base: none (blank)</option>
               {BASE_SKINS.map((b) => (
                 <option key={b} value={b}>Base: {SKIN_NAME[b]}</option>
               ))}
@@ -228,8 +377,15 @@ function CustomThemes({ settings, update }: { settings: Settings; update: (p: Pa
                 </button>
               ))}
             </div>
-            <button className="btn btn-small" onClick={() => patch(active.id, { [mode]: { ...BASE_PALETTES[active.base][mode] } })}>
+            <button className="btn btn-small" onClick={() => patch(active.id, { [mode]: { ...startPalette(active)[mode] } })}>
               Reset {mode} colors
+            </button>
+            <button
+              className="btn btn-small"
+              title="Save this theme as a .json file you can share or import later"
+              onClick={() => downloadText(`${active.name.replace(/[^\w.-]+/g, "-") || "theme"}.brain2-theme.json`, themeToJson(active))}
+            >
+              <Icon name="download" size={16} /> Export JSON
             </button>
           </div>
           <div className="token-grid">
@@ -238,7 +394,7 @@ function CustomThemes({ settings, update }: { settings: Settings; update: (p: Pa
                 <input
                   type="color"
                   className="color-input"
-                  value={active[mode][key] ?? BASE_PALETTES[active.base][mode][key]}
+                  value={active[mode][key] ?? startPalette(active)[mode][key]}
                   onChange={(e) => patch(active.id, { [mode]: { ...active[mode], [key]: e.target.value } })}
                 />
                 <span>{label}</span>
@@ -317,7 +473,7 @@ export function SettingsModal() {
           {section === "general" && (
             <>
               <h2>Appearance</h2>
-              <Row title="Skin" description="Themes inspired by popular Obsidian themes.">
+              <Row title="Theme" description="Built-in themes inspired by popular Obsidian themes. Pick one, or customize it into your own.">
                 <div className="skin-grid">
                   {SKINS.map((s) => (
                     <button
@@ -325,8 +481,12 @@ export function SettingsModal() {
                       className={`skin-card${settings.skin === s.id ? " active" : ""}`}
                       data-skin-preview={s.id}
                       onClick={() => set("skin", s.id)}
+                      title={`Inspired by ${s.source.replace("https://github.com/", "")}`}
                     >
-                      <span className="skin-swatch" />
+                      <span className="skin-previews">
+                        <SkinPreview def={s} dark={false} />
+                        <SkinPreview def={s} dark />
+                      </span>
                       <strong>{s.name}</strong>
                       <span className="muted small">{s.description}</span>
                     </button>
@@ -339,7 +499,7 @@ export function SettingsModal() {
                       if (themes.length) {
                         set("skin", `custom:${themes[themes.length - 1].id}`);
                       } else {
-                        const base = settings.skin.startsWith("custom:") ? "typewriter" : (settings.skin as BaseSkin);
+                        const base = migrateSkinId(settings.skin.startsWith("custom:") ? null : settings.skin);
                         const t = newCustomTheme(base, "My theme");
                         update({ customThemes: [t], skin: `custom:${t.id}` });
                       }
@@ -351,6 +511,21 @@ export function SettingsModal() {
                   </button>
                 </div>
               </Row>
+              {!settings.skin.startsWith("custom:") && (
+                <div className="row customize-skin">
+                  <button
+                    className="btn btn-small"
+                    title="Copy this theme into a custom theme you can edit, export and share"
+                    onClick={() => {
+                      const base = migrateSkinId(settings.skin);
+                      const t = newCustomTheme(base, `${SKIN_NAME[base]} (custom)`);
+                      update({ customThemes: [...(settings.customThemes ?? []), t], skin: `custom:${t.id}` });
+                    }}
+                  >
+                    <Icon name="palette" size={16} /> Customize {SKIN_NAME[migrateSkinId(settings.skin)]}…
+                  </button>
+                </div>
+              )}
               <CustomThemes settings={settings} update={update} />
               <Row title="Color scheme">
                 <select className="select" value={settings.colorScheme} onChange={(e) => set("colorScheme", e.target.value as Settings["colorScheme"])}>
@@ -385,9 +560,11 @@ export function SettingsModal() {
               <Row title="Font size" description={`${settings.fontSize}px`}>
                 <input
                   type="range"
+                  className="slider"
                   min={10}
                   max={32}
                   value={settings.fontSize}
+                  style={{ "--fill": `${((settings.fontSize - 10) / 22) * 100}%` } as React.CSSProperties}
                   onChange={(e) => set("fontSize", Number(e.target.value))}
                 />
               </Row>
@@ -396,6 +573,9 @@ export function SettingsModal() {
               </Row>
               <Row title="Readable line length" description="Limit the line width of notes. Off = notes use the full width.">
                 <Toggle value={settings.readableLineLength} onChange={(v) => set("readableLineLength", v)} />
+              </Row>
+              <Row title="Documents always light" description="Notes keep the light colors of your skin, even when the app is dark.">
+                <Toggle value={settings.documentsAlwaysLight} onChange={(v) => set("documentsAlwaysLight", v)} />
               </Row>
             </>
           )}
@@ -443,10 +623,12 @@ export function SettingsModal() {
               <Row title="Autosave delay" description={`Changes are saved ${settings.autosaveDelay} ms after you stop typing.`}>
                 <input
                   type="range"
+                  className="slider"
                   min={200}
                   max={5000}
                   step={100}
                   value={settings.autosaveDelay}
+                  style={{ "--fill": `${((settings.autosaveDelay - 200) / 4800) * 100}%` } as React.CSSProperties}
                   onChange={(e) => set("autosaveDelay", Number(e.target.value))}
                 />
               </Row>

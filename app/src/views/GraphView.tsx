@@ -470,7 +470,16 @@ function Slider({ label, value, min, max, step, onChange }: { label: string; val
   return (
     <label className="graph-slider">
       <span>{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+      <input
+        type="range"
+        className="slider"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        style={{ "--fill": `${((value - min) / (max - min || 1)) * 100}%` } as React.CSSProperties}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
     </label>
   );
 }

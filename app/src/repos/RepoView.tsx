@@ -1,5 +1,5 @@
 // One repository, Azure DevOps style: Files · Commits · Pushes · Branches · Tags · Pull requests.
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import hljs from "highlight.js/lib/common";
 import DOMPurify from "dompurify";
 import MarkdownIt from "markdown-it";
@@ -105,17 +105,60 @@ function ErrorNote({ error }: { error: string | null }) {
   return error ? <div className="form-warning"><Icon name="error" size={18} /><pre>{error}</pre></div> : null;
 }
 
-function RefPicker({ repo, value, onChange }: { repo: Repo; value: string; onChange: (v: string) => void }) {
-  const { data } = useLoad<Refs>(() => api.refs(repo.id), [repo.id]);
+/** The ref the working folder is on: its branch, or HEAD when detached. */
+export const headRef = (repo: Repo) => (repo.branch && !repo.branch.startsWith("(") ? repo.branch : "HEAD");
+
+/** Check out ``ref`` in the repo folder (typed into its terminal). Resolves with the ref the UI should show, or null. */
+export async function checkoutRef(repo: Repo, ref: string, refs: Refs | null): Promise<string | null> {
+  if (ref === headRef(repo)) return ref;
+  const local = refs?.local ?? [];
+  if (local.includes(ref)) return (await runRepoAction(repo, "checkout", { branch: ref }, `Switched to ${ref}`)) ? ref : null;
+  if (refs?.remote.includes(ref)) {
+    const name = ref.split("/").slice(1).join("/");
+    const ok = local.includes(name)
+      ? await runRepoAction(repo, "checkout", { branch: name }, `Switched to ${name}`)
+      : await runRepoAction(repo, "checkout-remote", { branch: ref }, `Switched to ${name} (tracking ${ref})`);
+    return ok ? name : null;
+  }
+  if (refs?.tags.includes(ref)) return (await runRepoAction(repo, "checkout-tag", { tag: ref }, `Checked out tag ${ref} (detached)`)) ? ref : null;
+  return null;
+}
+
+/** Keeps a page's ref in step with the folder: when HEAD moves (here or in any terminal) a page showing the
+ *  old branch follows it. */
+function useHeadRef(repo: Repo, initial?: string) {
+  const head = headRef(repo);
+  const [ref, setRef] = useState(initial ?? head);
+  const last = useRef(head);
+  useEffect(() => {
+    if (last.current === head) return;
+    setRef((cur) => (cur === last.current || cur === "HEAD" ? head : cur));
+    last.current = head;
+  }, [head]);
+  return [ref, setRef] as const;
+}
+
+function RefPicker({ repo, value, onChange, checkout }: { repo: Repo; value: string; onChange: (v: string) => void; checkout?: boolean }) {
+  const version = useRepos((s) => s.version);
+  const { data } = useLoad<Refs>(() => api.refs(repo.id), [repo.id, version, repo.branch]);
+  const [busy, setBusy] = useState(false);
+  const pick = async (v: string) => {
+    if (!checkout) return onChange(v);
+    setBusy(true);
+    const shown = await checkoutRef(repo, v, data ?? null);
+    setBusy(false);
+    if (shown) onChange(shown);
+  };
   return (
-    <label className="ref-picker" title="Branch or tag">
-      <Icon name="fork_right" size={16} />
-      <select className="select select-small" value={value} onChange={(e) => onChange(e.target.value)}>
+    <label className="ref-picker" title={checkout ? "Switch the repo folder to this branch or tag (git switch, in the terminal)" : "Branch or tag"}>
+      <Icon name={busy ? "hourglass_top" : "fork_right"} size={16} />
+      <select className="select select-small" value={value} disabled={busy} onChange={(e) => pick(e.target.value)}>
+        {value === "HEAD" && <option value="HEAD">HEAD (detached)</option>}
         {!data && <option value={value}>{value}</option>}
         {data && (
           <>
             <optgroup label="Branches">
-              {data.local.map((b) => <option key={b} value={b}>{b}{b === data.current ? " (current)" : ""}</option>)}
+              {data.local.map((b) => <option key={b} value={b}>{b}{b === data.current ? " (checked out)" : ""}</option>)}
             </optgroup>
             {data.remote.length > 0 && (
               <optgroup label="Remote branches">
@@ -127,7 +170,7 @@ function RefPicker({ repo, value, onChange }: { repo: Repo; value: string; onCha
                 {data.tags.map((t) => <option key={t} value={t}>{t}</option>)}
               </optgroup>
             )}
-            {value && !data.local.includes(value) && !data.remote.includes(value) && !data.tags.includes(value) && (
+            {value && value !== "HEAD" && !data.local.includes(value) && !data.remote.includes(value) && !data.tags.includes(value) && (
               <option value={value}>{value}</option>
             )}
           </>
@@ -247,7 +290,8 @@ export function RepoView({ repoId, page, arg }: { repoId: string; page: RepoPage
 
 // ---------------------------------------------------------------------------- files
 function FilesPage({ repo, initialPath }: { repo: Repo; initialPath?: string }) {
-  const [ref, setRef] = useState(repo.branch ?? "HEAD");
+  const [ref, setRef] = useHeadRef(repo);
+  const version = useRepos((s) => s.version);
   const [path, setPathRaw] = useState(initialPath ?? "");
   const [file, setFileRaw] = useState<string | null>(null);
   const [history, setHistory] = useState<{ path: string; file: string | null }[]>([]);
@@ -268,8 +312,8 @@ function FilesPage({ repo, initialPath }: { repo: Repo; initialPath?: string }) 
     setFileRaw(prev.file);
   };
   const [tab, setTab] = useState<"contents" | "history">("contents");
-  const tree = useLoad<RepoTree>(() => api.repoTree(repo.id, ref, path), [repo.id, ref, path]);
-  const blob = useLoad<Blob | null>(() => (file ? api.blob(repo.id, ref, file) : Promise.resolve(null)), [repo.id, ref, file]);
+  const tree = useLoad<RepoTree>(() => api.repoTree(repo.id, ref, path), [repo.id, ref, path, version]);
+  const blob = useLoad<Blob | null>(() => (file ? api.blob(repo.id, ref, file) : Promise.resolve(null)), [repo.id, ref, file, version]);
   const readme = useLoad<Blob | null>(
     () => (tree.data?.readme && !file ? api.blob(repo.id, ref, tree.data.readme) : Promise.resolve(null)),
     [repo.id, ref, tree.data?.readme, file],
@@ -284,7 +328,7 @@ function FilesPage({ repo, initialPath }: { repo: Repo; initialPath?: string }) 
         <button className="btn btn-small" disabled={!history.length} title="Back" onClick={back}>
           <Icon name="arrow_back" size={16} /> Back
         </button>
-        <RefPicker repo={repo} value={ref} onChange={(v) => (setRef(v), setFileRaw(null))} />
+        <RefPicker repo={repo} value={ref} checkout onChange={(v) => (setRef(v), setFileRaw(null))} />
         <div className="repo-crumbs">
           <button onClick={() => setPath("")}>
             <Icon name="home" size={16} /> {repo.name}
@@ -421,7 +465,7 @@ function GraphCell({ row, max }: { row: ReturnType<typeof layoutGraph>[number]; 
 }
 
 function CommitsPage({ repo, fixedRef, fixedPath, initialSha }: { repo: Repo; fixedRef?: string; fixedPath?: string; initialSha?: string }) {
-  const [ref, setRef] = useState(fixedRef ?? repo.branch ?? "HEAD");
+  const [ref, setRef] = useHeadRef(repo, fixedRef);
   const [all, setAll] = useState(false);
   const [author, setAuthor] = useState("");
   const [query, setQuery] = useState("");
@@ -465,7 +509,7 @@ function CommitsPage({ repo, fixedRef, fixedPath, initialSha }: { repo: Repo; fi
     <div className="repo-commits">
       {!fixedPath && (
         <div className="repo-subbar">
-          {!all && <RefPicker repo={repo} value={ref} onChange={setRef} />}
+          {!all && <RefPicker repo={repo} value={ref} checkout onChange={setRef} />}
           <label className="check"><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> All branches</label>
           <span className="spacer" />
           <input className="input input-small" placeholder="Author" value={author} onChange={(e) => setAuthor(e.target.value)}

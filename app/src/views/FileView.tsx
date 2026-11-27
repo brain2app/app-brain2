@@ -489,7 +489,7 @@ function TextDocumentView({ tab, file, active }: { tab: Tab; file: FileEntry; ac
   const validation = file.kind === "json" ? validateJson(text) : file.kind === "yaml" ? validateYaml(text) : null;
 
   return (
-    <div className={`view view-${file.kind}`}>
+    <div className={`view view-${file.kind}${isMarkdown && settings.documentsAlwaysLight ? " doc-light" : ""}`}>
       <ViewHeader
         tab={tab}
         actions={

@@ -21,6 +21,7 @@ from ..db import Database
 from ..accounts.providers import ProviderError
 from ..accounts.secrets import default_secrets
 from ..accounts.service import AccountError, AccountService
+from ..boards.service import BoardError, BoardService
 from ..calendars.service import CalendarError, CalendarService
 from ..gitcli import GitError
 from ..repos.service import RepoError, RepoService
@@ -178,6 +179,65 @@ class CalendarUpdate(BaseModel):
     sort_order: int | None = None
 
 
+class BoardCreate(BaseModel):
+    name: str
+    kind: str = "local"
+    config: dict | None = None
+    template: str = "basic"
+    icon: str | None = None
+
+
+class BoardUpdate(BaseModel):
+    name: str | None = None
+    icon: str | None = None
+    config: dict | None = None
+    sort_order: int | None = None
+
+
+class BoardContent(BaseModel):
+    content: str
+
+
+class GhMove(BaseModel):
+    project_id: str
+    field_id: str
+    item_id: str
+    option_id: str | None = None
+
+
+class GhAdd(BaseModel):
+    project_id: str
+    field_id: str
+    title: str
+    body: str | None = None
+    option_id: str | None = None
+
+
+class GhDraft(BaseModel):
+    draft_id: str
+    title: str
+    body: str | None = None
+
+
+class GhEdit(BaseModel):
+    kind: str
+    content_id: str
+    title: str
+    body: str | None = None
+
+
+class GhColumn(BaseModel):
+    field_id: str
+    action: str  # add | rename | delete
+    name: str | None = None
+    option_id: str | None = None
+
+
+class GhArchive(BaseModel):
+    project_id: str
+    item_id: str
+
+
 class SourceAdd(BaseModel):
     account_id: str
     remote_id: str
@@ -208,6 +268,7 @@ def create_app(
     watch: bool = True,
     secret_store=None,
     http=None,
+    gh=None,
 ) -> FastAPI:
     config = config or load_config()
     db = Database(config.db_path, config.settings_path)
@@ -218,13 +279,16 @@ def create_app(
     gitsync = VaultGitSync(vaults, terminals, bus.publish)
     accounts = AccountService(db, secret_store or default_secrets(config.config_dir), bus.publish, http)
     calendars = CalendarService(db, accounts, bus.publish)
+    boards = BoardService(db, config.home, bus.publish, gh)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if watch:
             await asyncio.to_thread(vaults.start_watching)
             calendars.start_background_sync()
+            repos.start_watching()
         yield
+        repos.stop_watching()
         calendars.stop()
         vaults.stop_watching()
         terminals.close_all()
@@ -240,6 +304,7 @@ def create_app(
     app.state.repos = repos
     app.state.accounts = accounts
     app.state.calendars = calendars
+    app.state.boards = boards
 
     app.add_middleware(
         CORSMiddleware,
@@ -263,6 +328,13 @@ def create_app(
     @app.exception_handler(AccountError)
     async def account_error(_: Request, exc: AccountError):
         return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+
+    @app.exception_handler(BoardError)
+    async def board_error(_: Request, exc: BoardError):
+        body = {"detail": str(exc)}
+        if exc.command:
+            body["command"] = exc.command
+        return JSONResponse(body, status_code=exc.status)
 
     @app.exception_handler(CalendarError)
     async def calendar_error(_: Request, exc: CalendarError):
@@ -689,6 +761,78 @@ def create_app(
     def create_event(cid: str, body: EventBody):
         return calendars.create_event(cid, body.model_dump())
 
+    # ---------------------------------------------------------------- boards
+    @app.get("/api/boards", dependencies=[api])
+    def list_boards():
+        return boards.list()
+
+    @app.post("/api/boards", dependencies=[api], status_code=201)
+    def create_board(body: BoardCreate):
+        return boards.create(body.name, body.kind, body.config, body.template, body.icon)
+
+    @app.get("/api/boards/sources/vault", dependencies=[api])
+    def board_vault_candidates():
+        return boards.vault_candidates()
+
+    @app.get("/api/boards/sources/github", dependencies=[api])
+    def board_github_projects():
+        return boards.github_projects()
+
+    @app.patch("/api/boards/{bid}", dependencies=[api])
+    def update_board(bid: str, body: BoardUpdate):
+        return boards.update(bid, body.name, body.icon, body.config, body.sort_order)
+
+    @app.delete("/api/boards/{bid}", dependencies=[api])
+    def delete_board(bid: str):
+        boards.delete(bid)
+        return {"ok": True}
+
+    @app.get("/api/boards/{bid}/content", dependencies=[api])
+    def board_content(bid: str):
+        return boards.content(bid)
+
+    @app.put("/api/boards/{bid}/content", dependencies=[api])
+    def save_board_content(bid: str, body: BoardContent):
+        return boards.save_content(bid, body.content)
+
+    @app.get("/api/boards/{bid}/github", dependencies=[api])
+    def github_board(bid: str):
+        return boards.github_board(bid)
+
+    @app.post("/api/boards/{bid}/github/move", dependencies=[api])
+    def github_move(bid: str, body: GhMove):
+        boards.github_move(bid, body.project_id, body.field_id, body.item_id, body.option_id)
+        return {"ok": True}
+
+    @app.post("/api/boards/{bid}/github/items", dependencies=[api], status_code=201)
+    def github_add(bid: str, body: GhAdd):
+        return {"id": boards.github_add(bid, body.project_id, body.field_id, body.title, body.body, body.option_id)}
+
+    @app.post("/api/boards/{bid}/github/draft", dependencies=[api])
+    def github_edit_draft(bid: str, body: GhDraft):
+        boards.github_edit_draft(bid, body.draft_id, body.title, body.body)
+        return {"ok": True}
+
+    @app.post("/api/boards/{bid}/github/edit", dependencies=[api])
+    def github_edit(bid: str, body: GhEdit):
+        boards.github_edit(bid, body.kind, body.content_id, body.title, body.body)
+        return {"ok": True}
+
+    @app.post("/api/boards/{bid}/github/delete", dependencies=[api])
+    def github_delete(bid: str, body: GhArchive):
+        boards.github_delete(bid, body.project_id, body.item_id)
+        return {"ok": True}
+
+    @app.post("/api/boards/{bid}/github/columns", dependencies=[api])
+    def github_column(bid: str, body: GhColumn):
+        boards.github_column(bid, body.field_id, body.action, body.name, body.option_id)
+        return {"ok": True}
+
+    @app.post("/api/boards/{bid}/github/archive", dependencies=[api])
+    def github_archive(bid: str, body: GhArchive):
+        boards.github_archive(bid, body.project_id, body.item_id)
+        return {"ok": True}
+
     @app.get("/api/events", dependencies=[api])
     def list_events(start: str, end: str, calendars_: str | None = Query(None, alias="calendars")):
         ids = [c for c in (calendars_ or "").split(",") if c] or None
@@ -751,6 +895,8 @@ def repo_command_argv(action: str, a: dict[str, Any]) -> list[str]:
         return ["git", "switch", _ref(a.get("branch"))]
     if action == "checkout-remote":
         return ["git", "switch", "--track", _ref(a.get("branch"))]
+    if action == "checkout-tag":
+        return ["git", "switch", "--detach", _ref(a.get("tag"))]
     if action == "branch-create":
         return ["git", "switch", "-c", _ref(a.get("name")), _ref(a.get("from") or "HEAD")]
     if action == "branch-delete":

@@ -1,4 +1,5 @@
 // Applies user appearance settings (fonts, accent colour, sizes) on top of the active skin.
+import { SKIN_DEFS, SKIN_IDS, type SkinColors, migrateSkinId, onAccentText, skinTokens } from "./skins";
 import type { BaseSkin, CustomTheme, Settings } from "./types";
 
 export const BUNDLED_FONTS = ["Inter", "IBM Plex Mono", "Source Serif 4"];
@@ -43,23 +44,42 @@ export const THEME_TOKENS: { key: string; label: string }[] = [
 ];
 
 type Palette = Record<string, string>;
-/** Mirrors the hex tokens in styles/skins.css; used as starting values for custom themes. */
-export const BASE_PALETTES: Record<BaseSkin, { light: Palette; dark: Palette }> = {
-  typewriter: {
-    light: { "bg-primary": "#fbfaf7", "bg-secondary": "#f2f0ea", "bg-tertiary": "#e9e6de", border: "#e2ded4", "text-normal": "#2a2925", "text-muted": "#6d6a62", "text-faint": "#a19d93", accent: "#1a9cf0", "text-link": "#1a7fc4", "code-bg": "#f0ede5", "h1-color": "#1d1c19", "h2-color": "#1d1c19", "h3-color": "#1d1c19", "h4-color": "#1d1c19" },
-    dark: { "bg-primary": "#1c1c1b", "bg-secondary": "#161615", "bg-tertiary": "#262624", border: "#2c2c2a", "text-normal": "#d9d6cf", "text-muted": "#9a968d", "text-faint": "#66635d", accent: "#2fb2ff", "text-link": "#5cc0ff", "code-bg": "#242422", "h1-color": "#ecebe6", "h2-color": "#ecebe6", "h3-color": "#ecebe6", "h4-color": "#ecebe6" },
-  },
-  primary: {
-    light: { "bg-primary": "#ffffff", "bg-secondary": "#f6f5fb", "bg-tertiary": "#ecebf6", border: "#e6e4f2", "text-normal": "#2c2a3a", "text-muted": "#6b6884", "text-faint": "#a3a0b8", accent: "#7158e2", "text-link": "#6a50e0", "code-bg": "#f4f3fa", "h1-color": "#2c2a3a", "h2-color": "#6a50e0", "h3-color": "#c0478f", "h4-color": "#2b8a9e" },
-    dark: { "bg-primary": "#1e1d29", "bg-secondary": "#181722", "bg-tertiary": "#272636", border: "#2d2b3c", "text-normal": "#e3e1f0", "text-muted": "#a19eb8", "text-faint": "#6b6884", accent: "#a594ff", "text-link": "#b3a5ff", "code-bg": "#262534", "h1-color": "#f1effa", "h2-color": "#b3a5ff", "h3-color": "#f28cc4", "h4-color": "#6fd0e2" },
-  },
-  "blue-topaz": {
-    light: { "bg-primary": "#fafcff", "bg-secondary": "#edf3fb", "bg-tertiary": "#dfe9f6", border: "#d9e4f2", "text-normal": "#1f2a3a", "text-muted": "#5b6b82", "text-faint": "#94a3b8", accent: "#2f7ae5", "text-link": "#2f7ae5", "code-bg": "#eef3fa", "h1-color": "#1d5fbf", "h2-color": "#d9534f", "h3-color": "#2e9d6a", "h4-color": "#8e5bd6" },
-    dark: { "bg-primary": "#1a202b", "bg-secondary": "#141922", "bg-tertiary": "#222a37", border: "#273142", "text-normal": "#dbe4f0", "text-muted": "#94a3b8", "text-faint": "#5f6d82", accent: "#5aa9ff", "text-link": "#6cb4ff", "code-bg": "#212836", "h1-color": "#6cb4ff", "h2-color": "#ff7b72", "h3-color": "#56d39a", "h4-color": "#c39bff" },
-  },
-};
 
-export const BASE_SKINS: BaseSkin[] = ["typewriter", "primary", "blue-topaz"];
+/** A theme's colours as editable custom-theme tokens. */
+function paletteOf(c: SkinColors): Palette {
+  const t = skinTokens(c, false);
+  return Object.fromEntries(THEME_TOKENS.map(({ key }) => [key, t[`--${key}`]]));
+}
+/** Starting values for custom themes, from the built-in theme definitions. */
+export const BASE_PALETTES = Object.fromEntries(
+  SKIN_DEFS.map((d) => [d.id, { light: paletteOf(d.light), dark: paletteOf(d.dark) }]),
+) as Record<BaseSkin, { light: Palette; dark: Palette }>;
+
+export const BASE_SKINS: BaseSkin[] = SKIN_IDS;
+
+/** Neutral starting point for a theme made from scratch: plain greys, no skin personality. */
+export const BLANK_PALETTE: { light: Palette; dark: Palette } = {
+  light: { "bg-primary": "#ffffff", "bg-secondary": "#f5f5f5", "bg-tertiary": "#ebebeb", border: "#e0e0e0", "text-normal": "#222222", "text-muted": "#666666", "text-faint": "#999999", accent: "#5c5c5c", "text-link": "#3d3d3d", "code-bg": "#f2f2f2", "h1-color": "#111111", "h2-color": "#111111", "h3-color": "#111111", "h4-color": "#111111" },
+  dark: { "bg-primary": "#1e1e1e", "bg-secondary": "#181818", "bg-tertiary": "#272727", border: "#303030", "text-normal": "#dddddd", "text-muted": "#9a9a9a", "text-faint": "#666666", accent: "#a8a8a8", "text-link": "#c8c8c8", "code-bg": "#262626", "h1-color": "#f0f0f0", "h2-color": "#f0f0f0", "h3-color": "#f0f0f0", "h4-color": "#f0f0f0" },
+};
+const BLANK_FONTS = { interface: "system-ui", text: "system-ui", mono: "ui-monospace" };
+
+/** The palette a theme starts from / resets to. */
+export function startPalette(t: Pick<CustomTheme, "base" | "blank">): { light: Palette; dark: Palette } {
+  return t.blank ? BLANK_PALETTE : BASE_PALETTES[t.base];
+}
+
+export function newBlankTheme(name: string): CustomTheme {
+  return {
+    id: Math.random().toString(36).slice(2, 10),
+    name,
+    base: "minimal",
+    blank: true,
+    light: { ...BLANK_PALETTE.light },
+    dark: { ...BLANK_PALETTE.dark },
+    fonts: { ...BLANK_FONTS },
+  };
+}
 
 export function newCustomTheme(base: BaseSkin, name: string): CustomTheme {
   return {
@@ -72,6 +92,13 @@ export function newCustomTheme(base: BaseSkin, name: string): CustomTheme {
   };
 }
 
+/** Settings saved before the theme rebuild use old theme ids; map them to the new ones. */
+export function normalizeSettings(s: Settings): Settings {
+  const skin = s.skin.startsWith("custom:") ? s.skin : migrateSkinId(s.skin);
+  const customThemes = (s.customThemes ?? []).map((t) => (SKIN_IDS.includes(t.base) ? t : { ...t, base: migrateSkinId(t.base) }));
+  return { ...s, skin, customThemes };
+}
+
 export function activeCustomTheme(s: Settings): CustomTheme | null {
   if (!s.skin.startsWith("custom:")) return null;
   const id = s.skin.slice("custom:".length);
@@ -82,7 +109,9 @@ export function activeCustomTheme(s: Settings): CustomTheme | null {
 export function parseThemeJson(text: string): CustomTheme {
   const raw = JSON.parse(text) as Partial<CustomTheme> & { brain2Theme?: number };
   if (!raw || typeof raw !== "object") throw new Error("Not a theme file");
-  const base = BASE_SKINS.includes(raw.base as BaseSkin) ? (raw.base as BaseSkin) : "typewriter";
+  const base = migrateSkinId(raw.base);
+  const blank = raw.blank === true;
+  const start = startPalette({ base, blank });
   const clean = (p: unknown, fallback: Palette): Palette => {
     const out: Palette = { ...fallback };
     if (p && typeof p === "object")
@@ -95,8 +124,9 @@ export function parseThemeJson(text: string): CustomTheme {
     id: Math.random().toString(36).slice(2, 10),
     name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim().slice(0, 60) : "Imported theme",
     base,
-    light: clean(raw.light, BASE_PALETTES[base].light),
-    dark: clean(raw.dark, BASE_PALETTES[base].dark),
+    ...(blank ? { blank: true } : {}),
+    light: clean(raw.light, start.light),
+    dark: clean(raw.dark, start.dark),
     fonts: {
       interface: typeof fonts.interface === "string" ? fonts.interface : undefined,
       text: typeof fonts.text === "string" ? fonts.text : undefined,
@@ -106,16 +136,18 @@ export function parseThemeJson(text: string): CustomTheme {
 }
 
 export function themeToJson(t: CustomTheme): string {
-  return JSON.stringify({ brain2Theme: 1, name: t.name, base: t.base, light: t.light, dark: t.dark, fonts: t.fonts ?? {} }, null, 2);
+  return JSON.stringify({ brain2Theme: 1, name: t.name, base: t.base, ...(t.blank ? { blank: true } : {}), light: t.light, dark: t.dark, fonts: t.fonts ?? {} }, null, 2);
 }
 
-const ACCENT_PROPS = ["--accent", "--accent-hover", "--accent-soft", "--selection", "--text-link", "--tag-text", "--tag-bg"];
+const ACCENT_PROPS = ["--accent", "--accent-hover", "--accent-soft", "--selection", "--text-link", "--tag-text", "--tag-bg", "--accent-text"];
 const PROPS = [
   "--font-interface", "--font-text", "--font-mono", ...ACCENT_PROPS, "--left-width", "--right-width",
   ...THEME_TOKENS.map((t) => `--${t.key}`), "--heading-color", "--bg-hover", "--bg-active",
 ];
 
-function applyAccent(root: HTMLElement, hex: string, dark: boolean) {
+type VarTarget = { style: { setProperty(name: string, value: string): void } };
+
+function applyAccent(root: VarTarget, hex: string, dark: boolean) {
   const rgb = hexToRgb(hex);
   if (rgb) {
     const [r, g, b] = rgb;
@@ -127,19 +159,15 @@ function applyAccent(root: HTMLElement, hex: string, dark: boolean) {
     root.style.setProperty("--text-link", `rgb(${r}, ${g}, ${b})`);
     root.style.setProperty("--tag-text", `rgb(${r}, ${g}, ${b})`);
     root.style.setProperty("--tag-bg", `rgba(${r}, ${g}, ${b}, 0.13)`);
+    // Text on accent-filled buttons: white on dark accents, near-black on light ones.
+    root.style.setProperty("--accent-text", onAccentText(hex));
   }
 }
 
-export function applyAppearance(s: Settings, dark: boolean) {
-  const root = document.documentElement;
-  for (const p of PROPS) root.style.removeProperty(p);
+/** Theme variables (custom palette, fonts, accent) for one color scheme, applied to ``target``. */
+function themeVars(target: VarTarget, s: Settings, dark: boolean) {
   const custom = activeCustomTheme(s);
-  root.dataset.skin = custom ? custom.base : s.skin.startsWith("custom:") ? "typewriter" : s.skin;
-  root.dataset.customTheme = custom ? custom.id : "";
-  root.dataset.theme = dark ? "dark" : "light";
-  root.style.setProperty("--font-text-size", `${s.fontSize}px`);
-  root.style.setProperty("--left-width", `${s.leftWidth}px`);
-  root.style.setProperty("--right-width", `${s.rightWidth}px`);
+  const root = target;
   if (custom) {
     const pal = dark ? custom.dark : custom.light;
     const basePal = BASE_PALETTES[custom.base][dark ? "dark" : "light"];
@@ -165,6 +193,34 @@ export function applyAppearance(s: Settings, dark: boolean) {
   if (s.textFont.trim()) root.style.setProperty("--font-text", fontStack(s.textFont, "system-ui, sans-serif"));
   if (s.monoFont.trim()) root.style.setProperty("--font-mono", fontStack(s.monoFont, "ui-monospace, monospace"));
   if (s.accentColor) applyAccent(root, s.accentColor, dark);
+}
+
+export function applyAppearance(s: Settings, dark: boolean) {
+  const root = document.documentElement;
+  for (const p of PROPS) root.style.removeProperty(p);
+  const custom = activeCustomTheme(s);
+  root.dataset.skin = custom ? custom.base : migrateSkinId(s.skin.startsWith("custom:") ? null : s.skin);
+  root.dataset.customTheme = custom ? custom.id : "";
+  root.dataset.theme = dark ? "dark" : "light";
+  root.dataset.docsLight = s.documentsAlwaysLight ? "true" : "";
+  root.style.setProperty("--font-text-size", `${s.fontSize}px`);
+  root.style.setProperty("--left-width", `${s.leftWidth}px`);
+  root.style.setProperty("--right-width", `${s.rightWidth}px`);
+  themeVars(root, s, dark);
+  // "Documents always light": the light variant of the same theme, scoped to document views.
+  let el = document.getElementById("brain2-doc-light") as HTMLStyleElement | null;
+  if (s.documentsAlwaysLight && dark) {
+    const vars: string[] = [];
+    themeVars({ style: { setProperty: (n, v) => vars.push(`${n}: ${v};`) } }, s, false);
+    if (!el) {
+      el = document.createElement("style");
+      el.id = "brain2-doc-light";
+      document.head.append(el);
+    }
+    el.textContent = `html:root[data-skin][data-theme][data-docs-light] .doc-light { ${vars.join(" ")} }`;
+  } else if (el) {
+    el.textContent = "";
+  }
 }
 
 /** Installed fonts via the Local Font Access API (Chromium/Electron), when permitted. */

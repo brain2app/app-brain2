@@ -1,10 +1,13 @@
 /* ========================================================================== CodeMirror */
 .cm-editor { background: transparent; color: var(--text-normal); font-family: var(--font-text); font-size: var(--font-text-size); }
 .cm-editor.cm-focused { outline: none; }
-.cm-scroller { font-family: inherit; line-height: var(--line-height); overflow: visible !important; }
+.cm-editor .cm-scroller { font-family: inherit; line-height: var(--line-height); overflow: visible !important; }
 .cm-content { padding: 0 0 4px; caret-color: var(--accent); }
 .cm-line { padding: 0; }
 .cm-cursor, .cm-dropCursor { border-left: 2px solid var(--accent) !important; }
+/* Draw the selection above line backgrounds (code blocks, frontmatter, active line) so it is always
+   visible; --selection is translucent, so text stays readable through it. */
+.cm-editor .cm-selectionLayer { z-index: 1 !important; pointer-events: none; }
 .cm-selectionBackground, .cm-focused .cm-selectionBackground, .cm-content ::selection { background: var(--selection) !important; }
 /* The active line never paints over block backgrounds (code blocks, frontmatter) — like Obsidian. */
 .cm-editor .cm-activeLine:not(.cm-codeblock):not(.cm-frontmatter) { background: transparent !important; }
@@ -37,24 +40,23 @@
 
 /* token colors (shared by source mode and code files) */
 .tok-heading { color: var(--heading-color, var(--h1-color)); font-weight: var(--heading-weight); }
-.tok-em { font-style: italic; }
-.tok-strong { font-weight: 700; }
+.tok-em { font-style: italic; color: var(--italic-color); }
+.tok-strong { font-weight: 700; color: var(--bold-color); }
 .tok-strike { text-decoration: line-through; color: var(--text-muted); }
 .tok-link { color: var(--text-link); }
 .tok-meta { color: var(--text-faint); }
 .tok-mono { font-family: var(--font-mono); }
 .tok-quote { color: var(--text-muted); }
-.tok-keyword { color: #c678dd; }
-.tok-string { color: #50a14f; }
-.tok-number { color: #d19a66; }
-.tok-property { color: var(--accent); }
+.tok-keyword { color: var(--syn-keyword); }
+.tok-string { color: var(--syn-string); }
+.tok-number { color: var(--syn-number); }
+.tok-property { color: var(--syn-attr); }
 .tok-comment { color: var(--text-faint); font-style: italic; }
-.tok-type { color: #e5a50a; }
-.tok-function { color: #4f8ff7; }
+.tok-type { color: var(--syn-type); }
+.tok-function { color: var(--syn-function); }
 .tok-variable { color: var(--text-normal); }
 .tok-punct { color: var(--text-muted); }
 .tok-invalid { color: var(--danger); }
-:root[data-theme="dark"] .tok-string { color: #98c379; }
 
 /* ---------------------------------------------------------------- live preview */
 .mode-live .cm-line.cm-heading, .mode-source .cm-line.cm-heading { font-weight: var(--heading-weight); line-height: 1.35; }
@@ -65,8 +67,10 @@
 .mode-live .cm-h5 { font-size: var(--h5-size); color: var(--h5-color); }
 .mode-live .cm-h6 { font-size: var(--h6-size); color: var(--h6-color); }
 .mode-live .cm-heading .tok-meta { color: var(--text-faint); font-weight: 400; }
-.mode-live .cm-em { font-style: italic; }
-.mode-live .cm-strong { font-weight: 700; }
+/* In live preview a heading line takes its level colour (h1…h6), not the generic heading token colour. */
+.mode-live .cm-heading .tok-heading { color: inherit; }
+.mode-live .cm-em { font-style: italic; color: var(--italic-color); }
+.mode-live .cm-strong { font-weight: 700; color: var(--bold-color); }
 .mode-live .cm-strike { text-decoration: line-through; color: var(--text-muted); }
 .mode-live .cm-inline-code { font-family: var(--font-mono); font-size: 0.88em; background: var(--code-bg); border-radius: 4px; padding: 0.1em 0.25em; }
 .mode-live .cm-highlight { background: var(--highlight-bg); border-radius: 2px; }
@@ -76,6 +80,8 @@
 .mode-live .cm-codeblock-begin.cm-codeblock-end { border-radius: var(--radius-m); }
 .mode-live .cm-blockquote { border-left: 3px solid var(--accent); padding-left: 14px !important; color: var(--text-muted); }
 .mode-live .cm-frontmatter { font-family: var(--font-mono); font-size: 0.82em; color: var(--text-muted); background: var(--bg-secondary); padding: 0 12px !important; }
+/* List items: the marker sits in a fixed-width box so wrapped lines align with the text (hanging indent). */
+.mode-live .cm-list-prefix { display: inline-block; text-indent: 0; white-space: pre; }
 .mode-live .cm-bullet { color: var(--text-faint); display: inline-block; width: 1em; text-align: center; transform: scale(1.3); }
 .mode-live .cm-hr-widget { display: inline-block; width: 100%; height: 1px; background: var(--border); vertical-align: middle; }
 .mode-live .cm-task-done { color: var(--text-faint); text-decoration: line-through; }
