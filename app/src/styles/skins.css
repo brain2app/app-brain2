@@ -1,0 +1,27 @@
+/* ==========================================================================
+   Shared defaults. The built-in themes themselves live in src/lib/skins.ts, which generates
+   their light/dark variables at startup. Components only use tokens.
+   ========================================================================== */
+:root {
+  --font-interface: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-text: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-text-size: 16px;
+  --line-height: 1.65;
+  --radius-s: 4px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+  --readable-width: 720px;
+  --sidebar-width: 268px;
+  --right-width: 280px;
+  --h1-size: 1.9em; --h2-size: 1.55em; --h3-size: 1.3em; --h4-size: 1.15em; --h5-size: 1.05em; --h6-size: 1em;
+  --heading-weight: 700;
+  --danger: #e5484d;
+  --success: #30a46c;
+  --warning: #f5a524;
+  --bold-color: inherit;
+  --italic-color: inherit;
+}
+
+/* Documents always light: the document view keeps light colors in a dark app. */
+.doc-light { color-scheme: light; color: var(--text-normal); background: var(--bg-primary); }
